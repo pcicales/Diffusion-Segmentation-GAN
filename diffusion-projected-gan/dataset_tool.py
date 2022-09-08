@@ -218,7 +218,9 @@ def open_mnist(images_gz: str, *, max_images: Optional[int]):
 def make_transform(
     transform: Optional[str],
     output_width: Optional[int],
-    output_height: Optional[int]
+    output_height: Optional[int],
+    crop_resize_delta: Optional[int],
+    rgba: Optional[bool],
 ) -> Callable[[np.ndarray], Optional[np.ndarray]]:
     def scale(width, height, img):
         w = img.shape[1]
@@ -257,6 +259,23 @@ def make_transform(
         canvas[(width - height) // 2 : (width + height) // 2, :] = img
         return canvas
 
+    def crop_resize(width, height, rgba, crop_resize_delta, img): # fix
+        if img.shape[1] < width or img.shape[0] < height:
+            return None
+        img = img[crop_resize_delta:-crop_resize_delta, crop_resize_delta:-crop_resize_delta, :]
+        if rgba:
+            img = PIL.Image.fromarray(img, 'RGBA')
+            canvas = np.zeros([width, width, 4], dtype=np.uint8)
+        else:
+            img = PIL.Image.fromarray(img, 'RGB')
+            canvas = np.zeros([width, width, 3], dtype=np.uint8)
+
+        img = img.resize((width, height), PIL.Image.LANCZOS)
+        img = np.array(img)
+
+        canvas[:, :, :] = img
+        return canvas
+
     if transform is None:
         return functools.partial(scale, output_width, output_height)
     if transform == 'center-crop':
@@ -267,6 +286,10 @@ def make_transform(
         if (output_width is None) or (output_height is None):
             error ('must specify --resolution=WxH when using ' + transform + ' transform')
         return functools.partial(center_crop_wide, output_width, output_height)
+    if transform == 'crop-resize':
+        if (output_width is None) or (output_height is None):
+            error ('must specify --resolution=WxH when using ' + transform + ' transform')
+        return functools.partial(crop_resize, output_width, output_height, rgba, crop_resize_delta)
     assert False, 'unknown transform'
 
 #----------------------------------------------------------------------------
@@ -325,18 +348,23 @@ def open_dest(dest: str) -> Tuple[str, Callable[[str, Union[bytes, str]], None],
 
 @click.command()
 @click.pass_context
-@click.option('--source', help='Directory or archive name for input dataset', required=True, metavar='PATH')
-@click.option('--dest', help='Output directory or archive name for output dataset', required=True, metavar='PATH')
+@click.option('--source', help='Directory or archive name for input dataset', default='/data/public/HULA/GLOM_RGBA', metavar='PATH')
+@click.option('--dest', help='Output directory or archive name for output dataset', default='/data/public/HULA/GLOM_RGBA_SG2/GLOM_RGBA_SG2.zip', metavar='PATH')
 @click.option('--max-images', help='Output only up to `max-images` images', type=int, default=None)
-@click.option('--transform', help='Input crop/resize mode', type=click.Choice(['center-crop', 'center-crop-wide']))
-@click.option('--resolution', help='Output resolution (e.g., \'512x512\')', metavar='WxH', type=parse_tuple)
+@click.option('--transform', help='Input crop/resize mode', type=click.Choice(['center-crop', 'center-crop-wide', 'crop-resize']), default='crop-resize')
+@click.option('--resolution', help='Output resolution (e.g., \'512x512\')', metavar='WxH', type=parse_tuple, default='512x512')
+@click.option('--crop_resize_delta', help='How many pixels to shave off each side', type=int, default=250)
+@click.option('--rgba', help='Whether or not the dataset is RGBA for seg', type=bool, default=True)
+
 def convert_dataset(
     ctx: click.Context,
     source: str,
     dest: str,
     max_images: Optional[int],
     transform: Optional[str],
-    resolution: Optional[Tuple[int, int]]
+    resolution: Optional[Tuple[int, int]],
+    crop_resize_delta: int,
+    rgba: bool
 ):
     """Convert an image dataset into a dataset archive usable with StyleGAN2 ADA PyTorch.
 
@@ -406,7 +434,7 @@ def convert_dataset(
     archive_root_dir, save_bytes, close_dest = open_dest(dest)
 
     if resolution is None: resolution = (None, None)
-    transform_image = make_transform(transform, *resolution)
+    transform_image = make_transform(transform, *resolution, rgba, crop_resize_delta)
 
     dataset_attrs = None
 
@@ -436,8 +464,8 @@ def convert_dataset(
             height = dataset_attrs['height']
             if width != height:
                 error(f'Image dimensions after scale and crop are required to be square.  Got {width}x{height}')
-            if dataset_attrs['channels'] not in [1, 3]:
-                error('Input images must be stored as RGB or grayscale')
+            if dataset_attrs['channels'] not in [1, 3, 4]:
+                error('Input images must be stored as RGB, RGBA, or grayscale')
             if width != 2 ** int(np.floor(np.log2(width))):
                 error('Image width/height after scale and crop are required to be power-of-two')
         elif dataset_attrs != cur_image_attrs:
@@ -445,7 +473,7 @@ def convert_dataset(
             error(f'Image {archive_fname} attributes must be equal across all images of the dataset.  Got:\n' + '\n'.join(err))
 
         # Save the image as an uncompressed PNG.
-        img = PIL.Image.fromarray(img, { 1: 'L', 3: 'RGB' }[channels])
+        img = PIL.Image.fromarray(img, {1: 'L', 3: 'RGB', 4: 'RGBA'}[channels])
         image_bits = io.BytesIO()
         img.save(image_bits, format='png', compress_level=0, optimize=False)
         save_bytes(os.path.join(archive_root_dir, archive_fname), image_bits.getbuffer())
