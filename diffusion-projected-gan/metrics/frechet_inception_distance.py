@@ -31,7 +31,7 @@ def compute_fid(opts, max_real, num_gen, swav=False, sfid=False):
 
         stats_gen, stats_seg_gen = metric_utils.compute_feature_stats_for_generator(
             opts=opts, detector_url=detector_url, detector_kwargs=detector_kwargs,
-            rel_lo=0, rel_hi=1, capture_mean_cov=True, max_items=num_gen, swav=swav, sfid=sfid).get_mean_cov()
+            rel_lo=0, rel_hi=1, capture_mean_cov=True, max_items=num_gen, swav=swav, sfid=sfid)
 
         (mu_gen, sigma_gen), (mu_seg_gen, sigma_seg_gen) = stats_gen.get_mean_cov(), stats_seg_gen.get_mean_cov()
 
