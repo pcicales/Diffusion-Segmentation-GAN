@@ -16,6 +16,7 @@ import copy
 import uuid
 import numpy as np
 import torch
+from torchvision import transforms
 import dnnlib
 from tqdm import tqdm
 
@@ -206,64 +207,147 @@ def compute_feature_stats_for_dataset(opts, detector_url, detector_kwargs, rel_l
 
     # Try to lookup from cache.
     cache_file = None
+    cache_seg_file = None
     if opts.cache:
         det_name = get_feature_detector_name(detector_url)
 
         # Choose cache file name.
         args = dict(dataset_kwargs=opts.dataset_kwargs, detector_url=detector_url, detector_kwargs=detector_kwargs, stats_kwargs=stats_kwargs)
         md5 = hashlib.md5(repr(sorted(args.items())).encode('utf-8'))
+        if opts.rgba:
+            cache_seg_tag = f'{dataset.name}-SEG-{det_name}-{md5.hexdigest()}'
+            cache_seg_file = os.path.join('.', 'dnnlib', 'gan-metrics', cache_seg_tag + '.pkl')
         cache_tag = f'{dataset.name}-{det_name}-{md5.hexdigest()}'
         cache_file = os.path.join('.', 'dnnlib', 'gan-metrics', cache_tag + '.pkl')
         # cache_file = dnnlib.make_cache_dir_path('gan-metrics', cache_tag + '.pkl')
 
         # Check if the file exists (all processes must agree).
-        flag = os.path.isfile(cache_file) if opts.rank == 0 else False
-        if opts.num_gpus > 1:
-            flag = torch.as_tensor(flag, dtype=torch.float32, device=opts.device)
-            torch.distributed.broadcast(tensor=flag, src=0)
-            flag = (float(flag.cpu()) != 0)
+        if opts.rgba:
+            flag = os.path.isfile(cache_file) if opts.rank == 0 else False
+            flag_seg = os.path.isfile(cache_seg_file) if opts.rank == 0 else False
+            if opts.num_gpus > 1:
+                flag = torch.as_tensor(flag, dtype=torch.float32, device=opts.device)
+                flag_seg = torch.as_tensor(flag_seg, dtype=torch.float32, device=opts.device)
+                torch.distributed.broadcast(tensor=flag, src=0)
+                torch.distributed.broadcast(tensor=flag_seg, src=0)
+                flag = (float(flag.cpu()) != 0)
+                flag_seg = (float(flag_seg.cpu()) != 0)
 
-        # Load.
-        if flag:
-            return FeatureStats.load(cache_file)
+            # Load only if we have both.
+            if flag and flag_seg:
+                return FeatureStats.load(cache_file), FeatureStats.load(cache_seg_file)
+
+        else:
+            flag = os.path.isfile(cache_file) if opts.rank == 0 else False
+            if opts.num_gpus > 1:
+                flag = torch.as_tensor(flag, dtype=torch.float32, device=opts.device)
+                torch.distributed.broadcast(tensor=flag, src=0)
+                flag = (float(flag.cpu()) != 0)
+
+            # Load.
+            if flag:
+                return FeatureStats.load(cache_file)
 
     print('Calculating the stats for this dataset the first time\n')
-    print(f'Saving them to {cache_file}')
+    if opts.rgba:
+        print(f'Saving image stats to {cache_file}')
+        print(f'Saving seg stats to {cache_seg_file}')
+    else:
+        print(f'Saving them to {cache_file}')
 
     # Initialize.
     num_items = len(dataset)
     if max_items is not None:
         num_items = min(num_items, max_items)
-    stats = FeatureStats(max_items=num_items, **stats_kwargs)
+    if opts.rgba:
+        stats = FeatureStats(max_items=num_items, **stats_kwargs)
+        stats_seg = FeatureStats(max_items=num_items, **stats_kwargs)
+    else:
+        stats = FeatureStats(max_items=num_items, **stats_kwargs)
+
     progress = opts.progress.sub(tag='dataset features', num_items=num_items, rel_lo=rel_lo, rel_hi=rel_hi)
+    if opts.rgba:
+        progress_seg = opts.progress.sub(tag='dataset seg features', num_items=num_items, rel_lo=rel_lo, rel_hi=rel_hi)
 
     # get detector
     detector = get_feature_detector(url=detector_url, device=opts.device, num_gpus=opts.num_gpus, rank=opts.rank, verbose=progress.verbose)
+    # we are going to want to imagenet normalize with an imagenet stat generator, get more interpretable FID scores
+    imnet_norm = transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
 
     # Main loop.
     item_subset = [(i * opts.num_gpus + opts.rank) % num_items for i in range((num_items - 1) // opts.num_gpus + 1)]
-    for images, _labels in tqdm(torch.utils.data.DataLoader(dataset=dataset, sampler=item_subset, batch_size=batch_size, **data_loader_kwargs)):
-        if images.shape[1] == 1: # assumes single channel to rgb
-            images = images.repeat([1, 3, 1, 1])
-
-        # we need to modify the input to the detector to make it compatible with RGBA+ inputs
-        # it is best to modify the input as opposed to the network as this is not trained, also better for comparison
-        elif images.shape[1] > 3:
+    if opts.rgba:
+        for images, _labels in tqdm(
+                torch.utils.data.DataLoader(dataset=dataset, sampler=item_subset, batch_size=batch_size,
+                                            **data_loader_kwargs)):
+            # separate the img and mask, make mask rgb
             images = images[:, :-1, :, :]
+            masks = images[:, -1:, :, :].repeat([1, 3, 1, 1])
 
-        with torch.no_grad():
-            features = detector(images.to(opts.device), **detector_kwargs)
+            # imagenet normalize
+            images = imnet_norm(images.to(torch.float32))
+            masks = imnet_norm(masks.to(torch.float32))
 
-        stats.append_torch(features, num_gpus=opts.num_gpus, rank=opts.rank)
-        progress.update(stats.num_items)
+            # scale the images to 0-255
+            for gen_id in range(images.shape[0]):
+                images[gen_id] = ((images[gen_id] - images[gen_id].min()) / (images[gen_id].max() - images[gen_id].min())) * 255
+                masks[gen_id] = ((masks[gen_id] - masks[gen_id].min()) / (masks[gen_id].max() - masks[gen_id].min())) * 255
 
-    # Save to cache.
-    if cache_file is not None and opts.rank == 0:
-        os.makedirs(os.path.dirname(cache_file), exist_ok=True)
-        temp_file = cache_file + '.' + uuid.uuid4().hex
-        stats.save(temp_file)
-        os.replace(temp_file, cache_file) # atomic
-    return stats
+            # round and clamp as needed
+            images.round().clamp(0, 255).to(torch.uint8)
+            masks.round().clamp(0, 255).to(torch.uint8)
+
+            with torch.no_grad():
+                img_features = detector(images.to(opts.device), **detector_kwargs)
+                mask_features = detector(masks.to(opts.device), **detector_kwargs)
+
+            stats.append_torch(img_features, num_gpus=opts.num_gpus, rank=opts.rank)
+            stats_seg.append_torch(mask_features, num_gpus=opts.num_gpus, rank=opts.rank)
+            progress.update(stats.num_items)
+            progress_seg.update(stats_seg.num_items)
+
+        # Save to cache.
+        if cache_file is not None and opts.rank == 0:
+            os.makedirs(os.path.dirname(cache_file), exist_ok=True)
+            temp_file = cache_file + '.' + uuid.uuid4().hex
+            stats.save(temp_file)
+            os.replace(temp_file, cache_file)  # atomic
+
+        if cache_seg_file is not None and opts.rank == 0:
+            os.makedirs(os.path.dirname(cache_seg_file), exist_ok=True)
+            temp_seg_file = cache_seg_file + '.' + uuid.uuid4().hex
+            stats_seg.save(temp_seg_file)
+            os.replace(temp_seg_file, cache_seg_file)  # atomic
+
+        return stats, stats_seg
+    else:
+        for images, _labels in tqdm(torch.utils.data.DataLoader(dataset=dataset, sampler=item_subset, batch_size=batch_size, **data_loader_kwargs)):
+            if images.shape[1] == 1: # assumes single channel to rgb
+                images = images.repeat([1, 3, 1, 1])
+
+            # imagenet normalize
+            images = imnet_norm(images.to(torch.float32))
+
+            # scale the images to 0-255
+            for gen_id in range(images.shape[0]):
+                images[gen_id] = ((images[gen_id] - images[gen_id].min()) / (images[gen_id].max() - images[gen_id].min())) * 255
+
+            # round and clamp as needed
+            images.round().clamp(0, 255).to(torch.uint8)
+
+            with torch.no_grad():
+                features = detector(images.to(opts.device), **detector_kwargs)
+
+            stats.append_torch(features, num_gpus=opts.num_gpus, rank=opts.rank)
+            progress.update(stats.num_items)
+
+        # Save to cache.
+        if cache_file is not None and opts.rank == 0:
+            os.makedirs(os.path.dirname(cache_file), exist_ok=True)
+            temp_file = cache_file + '.' + uuid.uuid4().hex
+            stats.save(temp_file)
+            os.replace(temp_file, cache_file) # atomic
+        return stats
 
 #----------------------------------------------------------------------------
 
@@ -277,35 +361,104 @@ def compute_feature_stats_for_generator(opts, detector_url, detector_kwargs, rel
     c_iter = iterate_random_labels(opts=opts, batch_size=batch_gen)
 
     # Initialize.
-    stats = FeatureStats(**stats_kwargs)
-    assert stats.max_items is not None
+    # we want to generate stats for both images and masks if we are in seg mode
+    if opts.rgba:
+        # image stats
+        stats = FeatureStats(**stats_kwargs)
+        # mask stats
+        stats_seg = FeatureStats(**stats_kwargs)
+        assert stats.max_items is not None
+        assert stats_seg.max_items is not None
+    else:
+        stats = FeatureStats(**stats_kwargs)
+        assert stats.max_items is not None
+
     progress = opts.progress.sub(tag='generator features', num_items=stats.max_items, rel_lo=rel_lo, rel_hi=rel_hi)
+    if opts.rgba:
+        progress_seg = opts.progress.sub(tag='generator seg features', num_items=stats_seg.max_items,
+                                         rel_lo=rel_lo, rel_hi=rel_hi)
 
     # get detector
     detector = get_feature_detector(url=detector_url, device=opts.device, num_gpus=opts.num_gpus, rank=opts.rank, verbose=progress.verbose)
+    # we are going to want to imagenet normalize with an imagenet stat generator, get more interpretable FID scores
+    imnet_norm = transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
 
     # Main loop.
-    while not stats.is_full():
-        images = []
-        for _i in range(batch_size // batch_gen):
-            z = torch.randn([batch_gen, G.z_dim], device=opts.device)
-            # img = G(z=z, c=next(c_iter), truncation_psi=0.1, **opts.G_kwargs)
-            img = G(z=z, c=next(c_iter), **opts.G_kwargs)
-            # keep this for now
-            img = (img * 127.5 + 128).clamp(0, 255).to(torch.uint8)
-            images.append(img)
-        images = torch.cat(images)
-        if images.shape[1] == 1:
-            images = images.repeat([1, 3, 1, 1])
+    # need to specify for rgba so that we can get stats for masks
+    if opts.rgba:
+        while not stats.is_full():
+            images = []
+            masks = []
+            for _i in range(batch_size // batch_gen):
+                z = torch.randn([batch_gen, G.z_dim], device=opts.device)
+                # img = G(z=z, c=next(c_iter), truncation_psi=0.1, **opts.G_kwargs)
 
-        # we need to modify the input to the detector to make it compatible with RGBA+ inputs
-        # it is best to modify the input as opposed to the network as this is not trained, also better for comparison
-        elif images.shape[1] > 3:
-            images = images[:, :-1, :, :]
+                # get the image outputs
+                raw_img = G(z=z, c=next(c_iter), **opts.G_kwargs)
 
-        with torch.no_grad():
-            features = detector(images.to(opts.device), **detector_kwargs)
+                # separate the img and mask, make mask rgb
+                img = raw_img[:, :-1, :, :]
+                mask = raw_img[:, -1:, :, :].repeat([1, 3, 1, 1])
 
-        stats.append_torch(features, num_gpus=opts.num_gpus, rank=opts.rank)
-        progress.update(stats.num_items)
-    return stats
+                # imagenet normalize
+                img = imnet_norm(img)
+                mask = imnet_norm(mask)
+
+                # scale the images to 0-255
+                for gen_id in range(img.shape[0]):
+                    img[gen_id] = ((img[gen_id] - img[gen_id].min()) / (img[gen_id].max() - img[gen_id].min())) * 255
+                    mask[gen_id] = ((mask[gen_id] - mask[gen_id].min()) / (mask[gen_id].max() - mask[gen_id].min())) * 255
+
+                # append them as needed
+                images.append(img.round().clamp(0, 255).to(torch.uint8))
+                masks.append(mask.round().clamp(0, 255).to(torch.uint8))
+
+            # get the input tensors
+            images = torch.cat(images)
+            masks = torch.cat(masks)
+
+            # get the features
+            with torch.no_grad():
+                img_features = detector(images.to(opts.device), **detector_kwargs)
+                mask_features = detector(masks.to(opts.device), **detector_kwargs)
+
+            # append the features to stats
+            stats.append_torch(img_features, num_gpus=opts.num_gpus, rank=opts.rank)
+            stats_seg.append_torch(mask_features, num_gpus=opts.num_gpus, rank=opts.rank)
+            progress.update(stats.num_items)
+            progress_seg.update(stats_seg.num_items)
+
+        return stats, stats_seg
+
+    else:
+        while not stats.is_full():
+            images = []
+            for _i in range(batch_size // batch_gen):
+                z = torch.randn([batch_gen, G.z_dim], device=opts.device)
+                # img = G(z=z, c=next(c_iter), truncation_psi=0.1, **opts.G_kwargs)
+
+                # get the image outputs
+                img = G(z=z, c=next(c_iter), **opts.G_kwargs)
+
+                # imagenet normalize
+                if img.shape[1] == 1:
+                    img = img.repeat([1, 3, 1, 1])
+                img = imnet_norm(img)
+
+                # scale the images to 0-255
+                for gen_id in range(img.shape[0]):
+                    img[gen_id] = ((img[gen_id] - img[gen_id].min()) / (img[gen_id].max() - img[gen_id].min())) * 255
+
+                # append them as needed
+                images.append(img.round().clamp(0, 255).to(torch.uint8))
+
+            # get the input tensor
+            images = torch.cat(images)
+
+            with torch.no_grad():
+                features = detector(images.to(opts.device), **detector_kwargs)
+
+            stats.append_torch(features, num_gpus=opts.num_gpus, rank=opts.rank)
+            progress.update(stats.num_items)
+
+        return stats

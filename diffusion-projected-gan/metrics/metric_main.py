@@ -76,18 +76,26 @@ def report_metric(result_dict, run_dir=None, snapshot_pkl=None):
 
 #----------------------------------------------------------------------------
 # Recommended metrics.
-
+# TODO: implement seg metrics for all other than fid
 @register_metric
 def fid50k_full(opts):
     opts.dataset_kwargs.update(max_size=None, xflip=False)
-    fid = frechet_inception_distance.compute_fid(opts, max_real=None, num_gen=50000)
-    return dict(fid50k_full=fid)
+    if opts.rgba:
+        fid, fid_seg = frechet_inception_distance.compute_fid(opts, max_real=None, num_gen=50000)
+        return dict(fid50k_full=fid, fid50k_seg_full=fid_seg)
+    else:
+        fid = frechet_inception_distance.compute_fid(opts, max_real=None, num_gen=50000)
+        return dict(fid50k_full=fid)
 
 @register_metric
 def fid10k_full(opts):
     opts.dataset_kwargs.update(max_size=None, xflip=False)
-    fid = frechet_inception_distance.compute_fid(opts, max_real=None, num_gen=10000)
-    return dict(fid10k_full=fid)
+    if opts.rgba:
+        fid, fid_seg = frechet_inception_distance.compute_fid(opts, max_real=None, num_gen=10000)
+        return dict(fid10k_full=fid, fid10k_seg_full=fid_seg)
+    else:
+        fid = frechet_inception_distance.compute_fid(opts, max_real=None, num_gen=10000)
+        return dict(fid10k_full=fid)
 
 @register_metric
 def kid50k_full(opts):
@@ -129,8 +137,12 @@ def eqr50k(opts):
 @register_metric
 def fid50k(opts):
     opts.dataset_kwargs.update(max_size=None)
-    fid = frechet_inception_distance.compute_fid(opts, max_real=50000, num_gen=50000)
-    return dict(fid50k=fid)
+    if opts.rgba:
+        fid, fid_seg = frechet_inception_distance.compute_fid(opts, max_real=50000, num_gen=50000)
+        return dict(fid50k=fid, fid50k_seg=fid_seg)
+    else:
+        fid = frechet_inception_distance.compute_fid(opts, max_real=50000, num_gen=50000)
+        return dict(fid50k=fid)
 
 @register_metric
 def kid50k(opts):
