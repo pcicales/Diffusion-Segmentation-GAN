@@ -35,6 +35,8 @@ class MetricOptions:
         self.run_dir = run_dir
         self.cur_nimg = cur_nimg
         self.snapshot_pkl = snapshot_pkl
+        self.rgba = dataset_kwargs['rgba']
+        self.rgba_mode = dataset_kwargs['rgba_mode']
 
 #----------------------------------------------------------------------------
 
@@ -241,8 +243,13 @@ def compute_feature_stats_for_dataset(opts, detector_url, detector_kwargs, rel_l
     # Main loop.
     item_subset = [(i * opts.num_gpus + opts.rank) % num_items for i in range((num_items - 1) // opts.num_gpus + 1)]
     for images, _labels in tqdm(torch.utils.data.DataLoader(dataset=dataset, sampler=item_subset, batch_size=batch_size, **data_loader_kwargs)):
-        if images.shape[1] == 1:
+        if images.shape[1] == 1: # assumes single channel to rgb
             images = images.repeat([1, 3, 1, 1])
+
+        # we need to modify the input to the detector to make it compatible with RGBA+ inputs
+        # it is best to modify the input as opposed to the network as this is not trained, also better for comparison
+        elif images.shape[1] > 3:
+            images = images[:, :-1, :, :]
 
         with torch.no_grad():
             features = detector(images.to(opts.device), **detector_kwargs)
@@ -284,11 +291,17 @@ def compute_feature_stats_for_generator(opts, detector_url, detector_kwargs, rel
             z = torch.randn([batch_gen, G.z_dim], device=opts.device)
             # img = G(z=z, c=next(c_iter), truncation_psi=0.1, **opts.G_kwargs)
             img = G(z=z, c=next(c_iter), **opts.G_kwargs)
+            # keep this for now
             img = (img * 127.5 + 128).clamp(0, 255).to(torch.uint8)
             images.append(img)
         images = torch.cat(images)
         if images.shape[1] == 1:
             images = images.repeat([1, 3, 1, 1])
+
+        # we need to modify the input to the detector to make it compatible with RGBA+ inputs
+        # it is best to modify the input as opposed to the network as this is not trained, also better for comparison
+        elif images.shape[1] > 3:
+            images = images[:, :-1, :, :]
 
         with torch.no_grad():
             features = detector(images.to(opts.device), **detector_kwargs)

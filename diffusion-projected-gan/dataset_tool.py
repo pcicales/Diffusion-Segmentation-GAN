@@ -264,14 +264,21 @@ def make_transform(
             return None
         img = img[crop_resize_delta:-crop_resize_delta, crop_resize_delta:-crop_resize_delta, :]
         if rgba:
-            img = PIL.Image.fromarray(img, 'RGBA')
+            # need to resize the img and mask separately, avoid lossy outputs
+            mask = PIL.Image.fromarray(img[:, :, -1], 'L')
+            img = PIL.Image.fromarray(img[:, :, :-1], 'RGB')
+            mask = mask.resize((width, height), PIL.Image.NEAREST)
+            img = img.resize((width, height), PIL.Image.LANCZOS)
             canvas = np.zeros([width, width, 4], dtype=np.uint8)
+            img_np = np.array(img)
+            mask_np = np.array(mask)
+            img = np.concatenate((img_np, mask_np[:, :, np.newaxis]), axis=2)
+
         else:
             img = PIL.Image.fromarray(img, 'RGB')
             canvas = np.zeros([width, width, 3], dtype=np.uint8)
-
-        img = img.resize((width, height), PIL.Image.LANCZOS)
-        img = np.array(img)
+            img = img.resize((width, height), PIL.Image.LANCZOS)
+            img = np.array(img)
 
         canvas[:, :, :] = img
         return canvas

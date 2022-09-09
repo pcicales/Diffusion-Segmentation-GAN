@@ -32,12 +32,16 @@ class Dataset(torch.utils.data.Dataset):
         use_labels  = False,    # Enable conditioning labels? False = label dimension is zero.
         xflip       = False,    # Artificially double the size of the dataset via x-flips. Applied after max_size.
         random_seed = 1,        # Random seed to use when applying max_size.
+        rgba = False,
+        rgba_mode = ''
     ):
         self._name = name
         self._raw_shape = list(raw_shape)
         self._use_labels = use_labels
         self._raw_labels = None
         self._label_shape = None
+        self._rgba = rgba
+        self._rgba_mode = rgba_mode
 
         # Apply max_size.
         self._raw_idx = np.arange(self._raw_shape[0], dtype=np.int64)
@@ -175,6 +179,8 @@ class ImageFolderDataset(Dataset):
     ):
         self._path = path
         self._zipfile = None
+        self._rgba = super_kwargs['rgba']
+        self._rgba_mode = super_kwargs['rgba_mode']
 
         if os.path.isdir(self._path):
             self._type = 'dir'
@@ -225,15 +231,42 @@ class ImageFolderDataset(Dataset):
 
     def _load_raw_image(self, raw_idx):
         fname = self._image_fnames[raw_idx]
-        with self._open_file(fname) as f:
-            if pyspng is not None and self._file_ext(fname) == '.png':
-                image = pyspng.load(f.read())
+        if self._rgba:
+            with self._open_file(fname) as f:
+                if pyspng is not None and self._file_ext(fname) == '.png':
+                    image = pyspng.load(f.read())
+                else:
+                    image = np.array(PIL.Image.open(f))
+            # assert rgba and 3 dim
+            if (image.ndim < 3) or (image.shape[-1] != 4):
+                raise AssertionError('RGBA mode must have RGBA inputs! Image with shape {} invalid!'.format(image.shape))
+            if self._rgba_mode == 'mean_extract':
+                # encode the mask using a mean of all pixels, extract the mask from generated images later
+                image[:, :, -1][:] = np.rint(np.mean(image, axis=2)).astype('uint8')[:]
+                # debugging purposes
+                # raw_mask = (image[:, :, -1:].astype('float')*4) - np.sum(image[:, :, :-1].astype('float'), axis=2)
+                # mask_quants = np.quantile(raw_mask, [0, 0.5, 1])
+                # raw_mask[np.where(raw_mask <= mask_quants[1])] = 0
+                # raw_mask[np.where(raw_mask > mask_quants[1])] = 255
+                # raw_mask = raw_mask.astype('uint8')
+                image = image.transpose(2, 0, 1) # HWC => CHW
+                return image
+            elif self._rgba_mode == 'naive':
+                # use the naive mask (expected to perform poorly)
+                image = image.transpose(2, 0, 1) # HWC => CHW
+                return image
             else:
-                image = np.array(PIL.Image.open(f))
-        if image.ndim == 2:
-            image = image[:, :, np.newaxis] # HW => HWC
-        image = image.transpose(2, 0, 1) # HWC => CHW
-        return image
+                raise AssertionError('{} is not a valid mask encoding strategy!'.format(self._rgba_mode))
+        else:
+            with self._open_file(fname) as f:
+                if pyspng is not None and self._file_ext(fname) == '.png':
+                    image = pyspng.load(f.read())
+                else:
+                    image = np.array(PIL.Image.open(f))
+            if image.ndim == 2:
+                image = image[:, :, np.newaxis] # HW => HWC
+            image = image.transpose(2, 0, 1) # HWC => CHW
+            return image
 
     def _load_raw_labels(self):
         fname = 'dataset.json'

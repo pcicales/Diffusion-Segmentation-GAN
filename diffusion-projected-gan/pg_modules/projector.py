@@ -34,16 +34,21 @@ def _make_scratch_csm(scratch, in_channels, cout, expand):
 
 def _make_efficientnet(model):
     pretrained = nn.Module()
-    pretrained.layer0 = nn.Sequential(model.conv_stem, model.bn1, model.act1, *model.blocks[0:2])
+    # perhaps due to an older version of timm...
+    # pretrained.layer0 = nn.Sequential(model.conv_stem, model.bn1, model.act1, *model.blocks[0:2])
+    pretrained.layer0 = nn.Sequential(model.conv_stem, model.bn1, *model.blocks[0:2])
     pretrained.layer1 = nn.Sequential(*model.blocks[2:3])
     pretrained.layer2 = nn.Sequential(*model.blocks[3:5])
     pretrained.layer3 = nn.Sequential(*model.blocks[5:9])
     return pretrained
 
 
-def calc_channels(pretrained, inp_res=224):
+def calc_channels(pretrained, inp_res=224, rgba=False, rgba_mode=''):
     channels = []
-    tmp = torch.zeros(1, 3, inp_res, inp_res)
+    if rgba:
+        tmp = torch.zeros(1, 4, inp_res, inp_res)
+    else:
+        tmp = torch.zeros(1, 3, inp_res, inp_res)
 
     # forward pass
     tmp = pretrained.layer0(tmp)
@@ -58,11 +63,16 @@ def calc_channels(pretrained, inp_res=224):
     return channels
 
 
-def _make_projector(im_res, cout, proj_type, expand=False):
+def _make_projector(im_res, cout, proj_type, expand=False, rgba=False, rgba_mode=''):
     assert proj_type in [0, 1, 2], "Invalid projection type"
 
     ### Build pretrained feature network
     model = timm.create_model('tf_efficientnet_lite0', pretrained=True)
+    if rgba:
+        # change to 4 channel input
+        model.conv_stem.in_channels = 4
+        # experimenting with assigning a pretrained weight to the fourth dim...
+        model.conv_stem.weight = torch.nn.Parameter(torch.cat((model.conv_stem.weight, model.conv_stem.weight[:, :-2, :, :]), dim=1))
     pretrained = _make_efficientnet(model)
 
     # determine resolution of feature maps, this is later used to calculate the number
@@ -71,7 +81,7 @@ def _make_projector(im_res, cout, proj_type, expand=False):
     # independent of the dataset resolution
     im_res = 256
     pretrained.RESOLUTIONS = [im_res//4, im_res//8, im_res//16, im_res//32]
-    pretrained.CHANNELS = calc_channels(pretrained)
+    pretrained.CHANNELS = calc_channels(pretrained, rgba=rgba, rgba_mode=rgba_mode)
 
     if proj_type == 0: return pretrained, None
 
@@ -106,19 +116,23 @@ class F_RandomProj(nn.Module):
         proj_type=2,  # 0 = no projection, 1 = cross channel mixing, 2 = cross scale mixing
         d_pos='first',
         noise_sd=0.5,
+        rgba=False,
+        rgba_mode='',
         **kwargs,
     ):
         super().__init__()
         self.proj_type = proj_type
         self.cout = cout
         self.expand = expand
+        self.rgba = rgba
+        self.rgba_mode = rgba_mode
 
         self.d_pos = d_pos
         self.noise_sd = noise_sd
         # self.diffusion = AugmentPipe(t_max=1000)
         self.diffusion = Diffusion(t_min=5, t_max=500, beta_start=1e-4, beta_end=1e-2)
         # build pretrained feature network and random decoder (scratch)
-        self.pretrained, self.scratch = _make_projector(im_res=im_res, cout=self.cout, proj_type=self.proj_type, expand=self.expand)
+        self.pretrained, self.scratch = _make_projector(im_res=im_res, cout=self.cout, proj_type=self.proj_type, expand=self.expand, rgba=rgba, rgba_mode=rgba_mode)
         self.CHANNELS = self.pretrained.CHANNELS
         self.RESOLUTIONS = self.pretrained.RESOLUTIONS
 

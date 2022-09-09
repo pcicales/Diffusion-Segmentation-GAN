@@ -13,6 +13,20 @@
 """Main training loop."""
 
 import os
+import sys
+
+# getting the name of the directory
+# where the this file is present.
+current = os.path.dirname(os.path.realpath(__file__))
+
+# Getting the parent directory name
+# where the current directory is present.
+parent = os.path.dirname(current)
+
+# adding the parent directory to
+# the sys.path.
+sys.path.append(parent)
+
 import time
 import copy
 import json
@@ -73,23 +87,70 @@ def setup_snapshot_image_grid(training_set, random_seed=0):
 
 #----------------------------------------------------------------------------
 
-def save_image_grid(img, fname, drange, grid_size):
+def save_image_grid(img, fname, drange, grid_size, rgba=False, rgba_mode=''):
     lo, hi = drange
     img = np.asarray(img, dtype=np.float32)
     img = (img - lo) * (255 / (hi - lo))
-    img = np.rint(img).clip(0, 255).astype(np.uint8)
 
-    gw, gh = grid_size
-    _N, C, H, W = img.shape
-    img = img.reshape([gh, gw, C, H, W])
-    img = img.transpose(0, 3, 1, 4, 2)
-    img = img.reshape([gh * H, gw * W, C])
+    if rgba:
+        # reconstruct the alpha channel as needed
+        if rgba_mode == 'mean_extract':
+            # decode the masks
+            raw_mask = (img[:, -1:, :, :] * 4) - np.sum(img[:, :-1, :, :], axis=1)[:, np.newaxis, :, :]
+            # can consider using quantiles later...
+            # mask_quants = [np.quantile(sub_mask, [0, 0.2, 1]) for sub_mask in raw_mask]
 
-    assert C in [1, 3]
-    if C == 1:
-        PIL.Image.fromarray(img[:, :, 0], 'L').save(fname)
-    if C == 3:
+            # get the binary masks
+            for mask_id in range(raw_mask.shape[0]):
+                raw_mask[mask_id][np.where(raw_mask[mask_id] <= 127.5)] = 0
+                raw_mask[mask_id][np.where(raw_mask[mask_id] > 127.5)] = 255
+
+            # now we get the np arrays as uint8
+            mask = raw_mask.astype('uint8')
+            img = np.rint(img[:, :-1, :, :]).clip(0, 255).astype(np.uint8)
+
+        # naive method just scales the prediction
+        elif rgba_mode == 'naive':
+            mask = np.rint(img[:, -1:, :, :]).clip(0, 255).astype(np.uint8)
+            img = np.rint(img[:, :-1, :, :]).clip(0, 255).astype(np.uint8)
+
+        else:
+            raise AssertionError('{} is not a valid mask encoding strategy!'.format(rgba_mode))
+
+        # now we generate our grids
+        gw, gh = grid_size
+
+        # get image grid, save
+        _N, C, H, W = img.shape
+        img = img.reshape([gh, gw, C, H, W])
+        img = img.transpose(0, 3, 1, 4, 2)
+        img = img.reshape([gh * H, gw * W, C])
         PIL.Image.fromarray(img, 'RGB').save(fname)
+
+        # get mask grid, save
+        _Nm, Cm, Hm, Wm = mask.shape
+        mask = mask.reshape([gh, gw, Cm, Hm, Wm])
+        mask = mask.transpose(0, 3, 1, 4, 2)
+        mask = mask.reshape([gh * Hm, gw * Wm])
+        PIL.Image.fromarray(mask, 'L').save(fname.replace('.png', '_masks.png'))
+
+        # get rgba grid
+        PIL.Image.fromarray(np.concatenate((img, mask[:, :, np.newaxis]), axis=2), 'RGBA').save(fname.replace('.png', '_alpha.png'))
+
+    else:
+        img = np.rint(img).clip(0, 255).astype(np.uint8)
+
+        gw, gh = grid_size
+        _N, C, H, W = img.shape
+        img = img.reshape([gh, gw, C, H, W])
+        img = img.transpose(0, 3, 1, 4, 2)
+        img = img.reshape([gh * H, gw * W, C])
+
+        assert C in [1, 3]
+        if C == 1:
+            PIL.Image.fromarray(img[:, :, 0], 'L').save(fname)
+        if C == 3:
+            PIL.Image.fromarray(img, 'RGB').save(fname)
 
 #----------------------------------------------------------------------------
 
@@ -159,7 +220,7 @@ def training_loop(
     # Construct networks.
     if rank == 0:
         print('Constructing networks...')
-    common_kwargs = dict(c_dim=training_set.label_dim, img_resolution=training_set.resolution, img_channels=training_set.num_channels)
+    common_kwargs = dict(c_dim=training_set.label_dim, img_resolution=training_set.resolution, img_channels=training_set.num_channels, rgba=training_set_kwargs['rgba'], rgba_mode=training_set_kwargs['rgba_mode'])
     G = dnnlib.util.construct_class_by_name(**G_kwargs, **common_kwargs).train().requires_grad_(False).to(device) # subclass of torch.nn.Module
     D = dnnlib.util.construct_class_by_name(**D_kwargs, **common_kwargs).train().requires_grad_(False).to(device) # subclass of torch.nn.Module
     G_ema = copy.deepcopy(G).eval()
@@ -197,6 +258,7 @@ def training_loop(
     # Setup augmentation.
     if rank == 0:
         print('Setting up augmentation...')
+        # TODO: add augmentation
     ada_stats = training_stats.Collector(regex='Loss/signs/real')
 
     # Distribute across GPUs.
@@ -238,13 +300,13 @@ def training_loop(
     if rank == 0:
         print('Exporting sample images...')
         grid_size, images, labels = setup_snapshot_image_grid(training_set=training_set)
-        save_image_grid(images, os.path.join(run_dir, 'reals.png'), drange=[0,255], grid_size=grid_size)
+        save_image_grid(images, os.path.join(run_dir, 'reals.png'), drange=[0,255], grid_size=grid_size, rgba=training_set_kwargs['rgba'], rgba_mode=training_set_kwargs['rgba_mode'])
 
         grid_z = torch.randn([labels.shape[0], G.z_dim], device=device).split(batch_gpu)
         grid_c = torch.from_numpy(labels).to(device).split(batch_gpu)
         images = torch.cat([G_ema(z=z, c=c, noise_mode='const').cpu() for z, c in zip(grid_z, grid_c)]).numpy()
 
-        save_image_grid(images, os.path.join(run_dir, 'fakes_init.png'), drange=[-1,1], grid_size=grid_size)
+        save_image_grid(images, os.path.join(run_dir, 'fakes_init.png'), drange=[-1,1], grid_size=grid_size, rgba=training_set_kwargs['rgba'], rgba_mode=training_set_kwargs['rgba_mode'])
 
     # Initialize logs.
     if rank == 0:
@@ -398,7 +460,8 @@ def training_loop(
         # Save image snapshot.
         if (rank == 0) and (image_snapshot_ticks is not None) and (done or cur_tick % image_snapshot_ticks == 0):
             images = torch.cat([G_ema(z=z, c=c, noise_mode='const').cpu() for z, c in zip(grid_z, grid_c)]).numpy()
-            save_image_grid(images, os.path.join(run_dir, f'fakes{cur_nimg//1000:06d}.png'), drange=[-1,1], grid_size=grid_size)
+            save_image_grid(images, os.path.join(run_dir, f'fakes{cur_nimg//1000:06d}.png'), drange=[-1,1],
+                            grid_size=grid_size, rgba=training_set_kwargs['rgba'], rgba_mode=training_set_kwargs['rgba_mode'])
 
         # Save network snapshot.
         snapshot_pkl = None

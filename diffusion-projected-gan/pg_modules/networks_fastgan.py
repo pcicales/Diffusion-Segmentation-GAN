@@ -19,10 +19,12 @@ class DummyMapping(nn.Module):
 
 
 class FastganSynthesis(nn.Module):
-    def __init__(self, ngf=128, z_dim=256, nc=3, img_resolution=256, lite=False):
+    def __init__(self, ngf=128, z_dim=256, nc=3, img_resolution=256, lite=False, rgba=False, rgba_mode=''):
         super().__init__()
         self.img_resolution = img_resolution
         self.z_dim = z_dim
+        self.rgba = rgba
+        self.rgba_mode = rgba_mode
 
         # channel multiplier
         nfc_multi = {2: 16, 4:16, 8:8, 16:4, 32:2, 64:2, 128:1, 256:0.5,
@@ -167,12 +169,16 @@ class Generator(nn.Module):
         w_dim=0,
         img_resolution=256,
         img_channels=3,
+        rgba=False,
+        rgba_mode='',
         ngf=128,
         cond=0,
         mapping_kwargs={},
         synthesis_kwargs={}
     ):
         super().__init__()
+        self.rgba = rgba
+        self.rgba_mode = rgba_mode
         self.z_dim = z_dim
         self.c_dim = c_dim
         self.w_dim = w_dim
@@ -182,7 +188,7 @@ class Generator(nn.Module):
         # Mapping and Synthesis Networks
         self.mapping = DummyMapping()  # to fit the StyleGAN API
         Synthesis = FastganSynthesisCond if cond else FastganSynthesis
-        self.synthesis = Synthesis(ngf=ngf, z_dim=z_dim, nc=img_channels, img_resolution=img_resolution, **synthesis_kwargs)
+        self.synthesis = Synthesis(ngf=ngf, z_dim=z_dim, nc=img_channels, img_resolution=img_resolution, rgba=rgba, rgba_mode=rgba_mode, **synthesis_kwargs)
 
     def forward(self, z, c, **kwargs):
         w = self.mapping(z, c)

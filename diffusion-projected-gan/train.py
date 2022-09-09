@@ -103,9 +103,9 @@ def launch_training(c, desc, outdir, dry_run):
             torch.multiprocessing.spawn(fn=subprocess_fn, args=(c, temp_dir), nprocs=c.num_gpus)
 
 
-def init_dataset_kwargs(data):
+def init_dataset_kwargs(data, rgba=False, rgba_mode='mean_extract'):
     try:
-        dataset_kwargs = dnnlib.EasyDict(class_name='training.dataset.ImageFolderDataset', path=data, use_labels=True, max_size=None, xflip=False)
+        dataset_kwargs = dnnlib.EasyDict(class_name='training.dataset.ImageFolderDataset', path=data, use_labels=True, max_size=None, xflip=False, rgba=rgba, rgba_mode=rgba_mode)
         dataset_obj = dnnlib.util.construct_class_by_name(**dataset_kwargs) # Subclass of training.dataset.Dataset.
         dataset_kwargs.resolution = dataset_obj.resolution # Be explicit about resolution.
         dataset_kwargs.use_labels = dataset_obj.has_labels # Be explicit about labels.
@@ -126,17 +126,21 @@ def parse_comma_separated_list(s):
 @click.command()
 
 # Required.
-@click.option('--outdir',       help='Where to save the results', metavar='DIR',                required=True)
-@click.option('--cfg',          help='Base configuration',                                      type=click.Choice(['fastgan', 'fastgan_lite', 'stylegan2']), required=True)
-@click.option('--data',         help='Training data', metavar='[ZIP|DIR]',                      type=str, required=True)
-@click.option('--gpus',         help='Number of GPUs to use', metavar='INT',                    type=click.IntRange(min=1), required=True)
-@click.option('--batch',        help='Total batch size', metavar='INT',                         type=click.IntRange(min=1), required=True)
+@click.option('--outdir',       help='Where to save the results', metavar='DIR',                default='/data/pcicales/diffusionGAN')
+@click.option('--cfg',          help='Base configuration',                                      type=click.Choice(['fastgan', 'fastgan_lite', 'stylegan2']), default='fastgan')
+@click.option('--data',         help='Training data', metavar='[ZIP|DIR]',                      type=str, default='/data/public/HULA/GLOM_RGBA_SG2/GLOM_RGBA_SG2_1k.zip')
+@click.option('--gpus',         help='Number of GPUs to use', metavar='INT',                    type=click.IntRange(min=1), default=2)
+@click.option('--batch',        help='Total batch size', metavar='INT',                         type=click.IntRange(min=1), default=32)
 
 # Diffusion config. (Most diffusion settings are fixed in the projector.py file)
-@click.option('--target',       help='Discriminator target', metavar='FLOAT',                   type=float, default=0.6, required=True)
+@click.option('--target',       help='Discriminator target', metavar='FLOAT',                   type=float, default=0.45)
 @click.option('--d_pos',        help='Diffusion adding position', metavar='STR',                type=str,   default='first')
 @click.option('--noise_sd',     help='Diffusion noise standard deviation', metavar='FLOAT',     type=float, default=0.5)
 @click.option('--ada_kimg',     help='# kimgs needed to push diffusion to maximum level',       type=int,   default=100)
+
+# Segmentation config
+@click.option('--rgba',       help='Whether or not we are generating with mask', metavar='BOOL', type=bool, default=True)
+@click.option('--rgba_mode',  help='How we encode our masks', metavar='STR', type=click.Choice(['mean_extract', 'naive']), default='mean_extract')
 
 # Optional features.
 @click.option('--cond',         help='Train conditional model', metavar='BOOL',                 type=bool, default=False, show_default=True)
@@ -144,7 +148,7 @@ def parse_comma_separated_list(s):
 @click.option('--resume',       help='Resume from given network pickle', metavar='[PATH|URL]',  type=str)
 
 # Misc hyperparameters.
-@click.option('--batch-gpu',    help='Limit batch size per GPU', metavar='INT',                 type=click.IntRange(min=1))
+@click.option('--batch-gpu',    help='Limit batch size per GPU', metavar='INT',                 type=click.IntRange(min=1), default=16)
 @click.option('--cbase',        help='Capacity multiplier', metavar='INT',                      type=click.IntRange(min=1), default=32768, show_default=True)
 @click.option('--cmax',         help='Max. feature maps', metavar='INT',                        type=click.IntRange(min=1), default=512, show_default=True)
 @click.option('--glr',          help='G learning rate  [default: varies]', metavar='FLOAT',     type=click.FloatRange(min=0), default=0.0002, show_default=True)
@@ -154,7 +158,7 @@ def parse_comma_separated_list(s):
 # Misc settings.
 @click.option('--desc',         help='String to include in result dir name', metavar='STR',     type=str)
 @click.option('--metrics',      help='Quality metrics', metavar='[NAME|A,B,C|none]',            type=parse_comma_separated_list, default='fid50k_full', show_default=True)
-@click.option('--kimg',         help='Total training duration', metavar='KIMG',                 type=click.IntRange(min=1), default=25000, show_default=True)
+@click.option('--kimg',         help='Total training duration', metavar='KIMG',                 type=click.IntRange(min=1), default=50000, show_default=True)
 @click.option('--tick',         help='How often to print progress', metavar='KIMG',             type=click.IntRange(min=1), default=4, show_default=True)
 @click.option('--snap',         help='How often to save snapshots', metavar='TICKS',            type=click.IntRange(min=1), default=50, show_default=True)
 @click.option('--seed',         help='Random seed', metavar='INT',                              type=click.IntRange(min=0), default=0, show_default=True)
@@ -177,7 +181,7 @@ def main(**kwargs):
     c.ada_kimg = opts.ada_kimg
 
     # Training set.
-    c.training_set_kwargs, dataset_name = init_dataset_kwargs(data=opts.data)
+    c.training_set_kwargs, dataset_name = init_dataset_kwargs(data=opts.data, rgba=opts.rgba, rgba_mode=opts.rgba_mode)
     if opts.cond and not c.training_set_kwargs.use_labels:
         raise click.ClickException('--cond=True requires labels specified in dataset.json')
     c.training_set_kwargs.use_labels = opts.cond
