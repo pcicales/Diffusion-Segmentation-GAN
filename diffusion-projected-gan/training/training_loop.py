@@ -14,6 +14,7 @@
 
 import os
 import sys
+from sklearn.cluster import KMeans
 
 # getting the name of the directory
 # where the this file is present.
@@ -95,18 +96,30 @@ def save_image_grid(img, fname, drange, grid_size, rgba=False, rgba_mode=''):
     if rgba:
         # reconstruct the alpha channel as needed
         if rgba_mode == 'mean_extract':
-            # decode the masks
-            raw_mask = (img[:, -1:, :, :] * 4) - np.sum(img[:, :-1, :, :], axis=1)[:, np.newaxis, :, :]
-            # can consider using quantiles later...
-            # mask_quants = [np.quantile(sub_mask, [0, 0.2, 1]) for sub_mask in raw_mask]
+            # decode the masks, make copies to avoid strange outputs
+            raw_mask = np.empty_like(img[:, -1:, :, :])
+            raw_img = np.empty_like(img[:, :-1, :, :])
+            # cast values
+            raw_mask[:] = img[:, -1:, :, :][:]
+            raw_img[:] = img[:, :-1, :, :][:]
 
             # get the binary masks
             for mask_id in range(raw_mask.shape[0]):
-                raw_mask[mask_id][np.where(raw_mask[mask_id] <= 127.5)] = 0
-                raw_mask[mask_id][np.where(raw_mask[mask_id] > 127.5)] = 255
+                simg = raw_img[mask_id, :, :, :]
+                bmask = (raw_mask[mask_id, 0, :, :] * 4) - np.sum(simg, axis=0)
+                out_mask = np.empty_like(bmask)
+                _, mask_grouping = np.histogram(bmask.flatten(), bins=500)
+                try:
+                    mask_k = KMeans(n_clusters=2, random_state=0).fit(mask_grouping.reshape(-1, 1))
+                    out_mask[bmask >= mask_grouping[mask_k.labels_ == mask_k.cluster_centers_.argmax()].min()] = 255
+                    out_mask[bmask < mask_grouping[mask_k.labels_ == mask_k.cluster_centers_.argmax()].min()] = 0
+                    img[mask_id, -1:, :, :][:] = out_mask[:]
+                except:
+                    print('WARNING: Generated masks cant be clustered... if this isnt init, check generator.')
+                    img[mask_id, -1:, :, :][:] = out_mask[:]
 
             # now we get the np arrays as uint8
-            mask = raw_mask.astype('uint8')
+            mask = np.rint(img[:, -1:, :, :]).clip(0, 255).astype(np.uint8)
             img = np.rint(img[:, :-1, :, :]).clip(0, 255).astype(np.uint8)
 
         # naive method just scales the prediction
@@ -300,13 +313,21 @@ def training_loop(
     if rank == 0:
         print('Exporting sample images...')
         grid_size, images, labels = setup_snapshot_image_grid(training_set=training_set)
-        save_image_grid(images, os.path.join(run_dir, 'reals.png'), drange=[0,255], grid_size=grid_size, rgba=training_set_kwargs['rgba'], rgba_mode=training_set_kwargs['rgba_mode'])
+        save_image_grid(images, os.path.join(run_dir, 'reals.png'), drange=[0,255],
+                        grid_size=grid_size, rgba=training_set_kwargs['rgba'],
+                        rgba_mode=training_set_kwargs['rgba_mode'])
 
         grid_z = torch.randn([labels.shape[0], G.z_dim], device=device).split(batch_gpu)
         grid_c = torch.from_numpy(labels).to(device).split(batch_gpu)
-        images = torch.cat([G_ema(z=z, c=c, noise_mode='const').cpu() for z, c in zip(grid_z, grid_c)]).numpy()
 
-        save_image_grid(images, os.path.join(run_dir, 'fakes_init.png'), drange=[-1,1], grid_size=grid_size, rgba=training_set_kwargs['rgba'], rgba_mode=training_set_kwargs['rgba_mode'])
+        if (training_set_kwargs['rgba_mode'] == 'mean_extract') and training_set_kwargs['rgba']:
+            print('Not exporting init fakes when using mean_extract for masks...')
+        else:
+            images = torch.cat([G_ema(z=z, c=c, noise_mode='const').cpu() for z, c in zip(grid_z, grid_c)]).numpy()
+
+            save_image_grid(images, os.path.join(run_dir, 'fakes_init.png'), drange=[-1,1],
+                            grid_size=grid_size, rgba=training_set_kwargs['rgba'],
+                            rgba_mode=training_set_kwargs['rgba_mode'])
 
     # Initialize logs.
     if rank == 0:

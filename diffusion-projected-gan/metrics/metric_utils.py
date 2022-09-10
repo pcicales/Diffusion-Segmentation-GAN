@@ -271,35 +271,33 @@ def compute_feature_stats_for_dataset(opts, detector_url, detector_kwargs, rel_l
 
     # get detector
     detector = get_feature_detector(url=detector_url, device=opts.device, num_gpus=opts.num_gpus, rank=opts.rank, verbose=progress.verbose)
-    # we are going to want to imagenet normalize with an imagenet stat generator, get more interpretable FID scores
-    imnet_norm = transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
 
     # Main loop.
     item_subset = [(i * opts.num_gpus + opts.rank) % num_items for i in range((num_items - 1) // opts.num_gpus + 1)]
+    lo, hi = 0, 255
     if opts.rgba:
         for images, _labels in tqdm(
                 torch.utils.data.DataLoader(dataset=dataset, sampler=item_subset, batch_size=batch_size,
                                             **data_loader_kwargs)):
             # separate the img and mask, make mask rgb
-            images = images[:, :-1, :, :]
-            masks = images[:, -1:, :, :].repeat([1, 3, 1, 1])
+            raw_images = torch.empty_like(images[:, :-1, :, :])
+            raw_masks = torch.empty_like(images[:, :-1, :, :])
 
-            # imagenet normalize
-            images = imnet_norm(images.to(torch.float32))
-            masks = imnet_norm(masks.to(torch.float32))
+            # cast the values
+            raw_images[:] = images[:, :-1, :, :][:]
+            raw_masks[:] = images[:, -1:, :, :].repeat([1, 3, 1, 1])[:]
 
-            # scale the images to 0-255
-            for gen_id in range(images.shape[0]):
-                images[gen_id] = ((images[gen_id] - images[gen_id].min()) / (images[gen_id].max() - images[gen_id].min())) * 255
-                masks[gen_id] = ((masks[gen_id] - masks[gen_id].min()) / (masks[gen_id].max() - masks[gen_id].min())) * 255
+            # # scale the images to 0-255
+            # images = (raw_images - lo) * (255 / (hi - lo))
+            # masks = (raw_masks - lo) * (255 / (hi - lo))
 
             # round and clamp as needed
-            images.round().clamp(0, 255).to(torch.uint8)
-            masks.round().clamp(0, 255).to(torch.uint8)
+            raw_images.to(torch.uint8)
+            raw_masks.to(torch.uint8)
 
             with torch.no_grad():
-                img_features = detector(images.to(opts.device), **detector_kwargs)
-                mask_features = detector(masks.to(opts.device), **detector_kwargs)
+                img_features = detector(raw_images.to(opts.device), **detector_kwargs)
+                mask_features = detector(raw_masks.to(opts.device), **detector_kwargs)
 
             stats.append_torch(img_features, num_gpus=opts.num_gpus, rank=opts.rank)
             stats_seg.append_torch(mask_features, num_gpus=opts.num_gpus, rank=opts.rank)
@@ -322,11 +320,8 @@ def compute_feature_stats_for_dataset(opts, detector_url, detector_kwargs, rel_l
         return stats, stats_seg
     else:
         for images, _labels in tqdm(torch.utils.data.DataLoader(dataset=dataset, sampler=item_subset, batch_size=batch_size, **data_loader_kwargs)):
-            if images.shape[1] == 1: # assumes single channel to rgb
+            if images.shape[1] == 1: # assumes single channel to rgb, adjust this all later
                 images = images.repeat([1, 3, 1, 1])
-
-            # imagenet normalize
-            images = imnet_norm(images.to(torch.float32))
 
             # scale the images to 0-255
             for gen_id in range(images.shape[0]):
@@ -380,42 +375,44 @@ def compute_feature_stats_for_generator(opts, detector_url, detector_kwargs, rel
 
     # get detector
     detector = get_feature_detector(url=detector_url, device=opts.device, num_gpus=opts.num_gpus, rank=opts.rank, verbose=progress.verbose)
-    # we are going to want to imagenet normalize with an imagenet stat generator, get more interpretable FID scores
-    imnet_norm = transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
 
     # Main loop.
     # need to specify for rgba so that we can get stats for masks
+    lo, hi = -1, 1
     if opts.rgba:
         while not stats.is_full():
-            images = []
-            masks = []
+            images_full = []
+            masks_full = []
             for _i in range(batch_size // batch_gen):
                 z = torch.randn([batch_gen, G.z_dim], device=opts.device)
                 # img = G(z=z, c=next(c_iter), truncation_psi=0.1, **opts.G_kwargs)
 
                 # get the image outputs
-                raw_img = G(z=z, c=next(c_iter), **opts.G_kwargs)
+                images = G(z=z, c=next(c_iter), **opts.G_kwargs)
 
                 # separate the img and mask, make mask rgb
-                img = raw_img[:, :-1, :, :]
-                mask = raw_img[:, -1:, :, :].repeat([1, 3, 1, 1])
+                raw_images = torch.empty_like(images[:, :-1, :, :])
+                raw_masks = torch.empty_like(images[:, :-1, :, :])
 
-                # imagenet normalize
-                img = imnet_norm(img)
-                mask = imnet_norm(mask)
+                # cast the values
+                raw_images[:] = images[:, :-1, :, :][:]
+                raw_masks[:] = images[:, -1:, :, :].repeat([1, 3, 1, 1])[:]
 
                 # scale the images to 0-255
-                for gen_id in range(img.shape[0]):
-                    img[gen_id] = ((img[gen_id] - img[gen_id].min()) / (img[gen_id].max() - img[gen_id].min())) * 255
-                    mask[gen_id] = ((mask[gen_id] - mask[gen_id].min()) / (mask[gen_id].max() - mask[gen_id].min())) * 255
+                images = (raw_images - lo) * (255 / (hi - lo))
+                masks = (raw_masks - lo) * (255 / (hi - lo))
+
+                # round and clamp as needed
+                images.round().clamp(0, 255).to(torch.uint8)
+                masks.round().clamp(0, 255).to(torch.uint8)
 
                 # append them as needed
-                images.append(img.round().clamp(0, 255).to(torch.uint8))
-                masks.append(mask.round().clamp(0, 255).to(torch.uint8))
+                images_full.append(images)
+                masks_full.append(masks)
 
             # get the input tensors
-            images = torch.cat(images)
-            masks = torch.cat(masks)
+            images = torch.cat(images_full)
+            masks = torch.cat(masks_full)
 
             # get the features
             with torch.no_grad():
@@ -443,7 +440,6 @@ def compute_feature_stats_for_generator(opts, detector_url, detector_kwargs, rel
                 # imagenet normalize
                 if img.shape[1] == 1:
                     img = img.repeat([1, 3, 1, 1])
-                img = imnet_norm(img)
 
                 # scale the images to 0-255
                 for gen_id in range(img.shape[0]):

@@ -103,9 +103,10 @@ def launch_training(c, desc, outdir, dry_run):
             torch.multiprocessing.spawn(fn=subprocess_fn, args=(c, temp_dir), nprocs=c.num_gpus)
 
 
-def init_dataset_kwargs(data, rgba=False, rgba_mode='mean_extract'):
+def init_dataset_kwargs(data, rgba=False, rgba_mode='mean_extract', rgba_mult=1):
     try:
-        dataset_kwargs = dnnlib.EasyDict(class_name='training.dataset.ImageFolderDataset', path=data, use_labels=True, max_size=None, xflip=False, rgba=rgba, rgba_mode=rgba_mode)
+        dataset_kwargs = dnnlib.EasyDict(class_name='training.dataset.ImageFolderDataset', path=data, use_labels=True,
+                                         max_size=None, xflip=False, rgba=rgba, rgba_mode=rgba_mode, rgba_mult=rgba_mult)
         dataset_obj = dnnlib.util.construct_class_by_name(**dataset_kwargs) # Subclass of training.dataset.Dataset.
         dataset_kwargs.resolution = dataset_obj.resolution # Be explicit about resolution.
         dataset_kwargs.use_labels = dataset_obj.has_labels # Be explicit about labels.
@@ -128,7 +129,7 @@ def parse_comma_separated_list(s):
 # Required.
 @click.option('--outdir',       help='Where to save the results', metavar='DIR',                default='/data/pcicales/diffusionGAN')
 @click.option('--cfg',          help='Base configuration',                                      type=click.Choice(['fastgan', 'fastgan_lite', 'stylegan2']), default='fastgan')
-@click.option('--data',         help='Training data', metavar='[ZIP|DIR]',                      type=str, default='/data/public/HULA/GLOM_RGBA_SG2/GLOM_RGBA_SG2_1k.zip')
+@click.option('--data',         help='Training data', metavar='[ZIP|DIR]',                      type=str, default='/data/public/HULA/GLOM_RGBA_SG2/GLOM_RGBA_SG2_FULL.zip')
 @click.option('--gpus',         help='Number of GPUs to use', metavar='INT',                    type=click.IntRange(min=1), default=2)
 @click.option('--batch',        help='Total batch size', metavar='INT',                         type=click.IntRange(min=1), default=32)
 
@@ -141,6 +142,7 @@ def parse_comma_separated_list(s):
 # Segmentation config
 @click.option('--rgba',       help='Whether or not we are generating with mask', metavar='BOOL', type=bool, default=True)
 @click.option('--rgba_mode',  help='How we encode our masks', metavar='STR', type=click.Choice(['mean_extract', 'naive']), default='mean_extract')
+@click.option('--rgba_mult',  help='What multiplier to use on binary mask', metavar='INT', type=int, default=3)
 
 # Optional features.
 @click.option('--cond',         help='Train conditional model', metavar='BOOL',                 type=bool, default=False, show_default=True)
@@ -160,14 +162,13 @@ def parse_comma_separated_list(s):
 @click.option('--metrics',      help='Quality metrics', metavar='[NAME|A,B,C|none]',            type=parse_comma_separated_list, default='fid50k_full', show_default=True)
 @click.option('--kimg',         help='Total training duration', metavar='KIMG',                 type=click.IntRange(min=1), default=50000, show_default=True)
 @click.option('--tick',         help='How often to print progress', metavar='KIMG',             type=click.IntRange(min=1), default=4, show_default=True)
-@click.option('--snap',         help='How often to save snapshots', metavar='TICKS',            type=click.IntRange(min=1), default=1, show_default=True)
+@click.option('--snap',         help='How often to save snapshots', metavar='TICKS',            type=click.IntRange(min=1), default=2, show_default=True)
 @click.option('--seed',         help='Random seed', metavar='INT',                              type=click.IntRange(min=0), default=0, show_default=True)
 @click.option('--fp32',         help='Disable mixed-precision', metavar='BOOL',                 type=bool, default=False, show_default=True)
 @click.option('--nobench',      help='Disable cuDNN benchmarking', metavar='BOOL',              type=bool, default=False, show_default=True)
 @click.option('--workers',      help='DataLoader worker processes', metavar='INT',              type=click.IntRange(min=1), default=3, show_default=True)
 @click.option('-n','--dry-run', help='Print training options and exit',                         is_flag=True)
 @click.option('--restart_every',help='Time interval in seconds to restart code', metavar='INT', type=int, default=9999999, show_default=True)
-
 
 def main(**kwargs):
     # Initialize config.
@@ -181,7 +182,7 @@ def main(**kwargs):
     c.ada_kimg = opts.ada_kimg
 
     # Training set.
-    c.training_set_kwargs, dataset_name = init_dataset_kwargs(data=opts.data, rgba=opts.rgba, rgba_mode=opts.rgba_mode)
+    c.training_set_kwargs, dataset_name = init_dataset_kwargs(data=opts.data, rgba=opts.rgba, rgba_mode=opts.rgba_mode, rgba_mult=opts.rgba_mult)
     if opts.cond and not c.training_set_kwargs.use_labels:
         raise click.ClickException('--cond=True requires labels specified in dataset.json')
     c.training_set_kwargs.use_labels = opts.cond

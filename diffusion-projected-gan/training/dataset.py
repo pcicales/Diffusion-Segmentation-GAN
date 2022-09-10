@@ -33,7 +33,8 @@ class Dataset(torch.utils.data.Dataset):
         xflip       = False,    # Artificially double the size of the dataset via x-flips. Applied after max_size.
         random_seed = 1,        # Random seed to use when applying max_size.
         rgba = False,
-        rgba_mode = ''
+        rgba_mode = '',
+        rgba_mult = 1
     ):
         self._name = name
         self._raw_shape = list(raw_shape)
@@ -42,6 +43,7 @@ class Dataset(torch.utils.data.Dataset):
         self._label_shape = None
         self._rgba = rgba
         self._rgba_mode = rgba_mode
+        self._rgba_mult = rgba_mult
 
         # Apply max_size.
         self._raw_idx = np.arange(self._raw_shape[0], dtype=np.int64)
@@ -181,6 +183,7 @@ class ImageFolderDataset(Dataset):
         self._zipfile = None
         self._rgba = super_kwargs['rgba']
         self._rgba_mode = super_kwargs['rgba_mode']
+        self._rgba_mult = super_kwargs['rgba_mult']
 
         if os.path.isdir(self._path):
             self._type = 'dir'
@@ -242,7 +245,16 @@ class ImageFolderDataset(Dataset):
                 raise AssertionError('RGBA mode must have RGBA inputs! Image with shape {} invalid!'.format(image.shape))
             if self._rgba_mode == 'mean_extract':
                 # encode the mask using a mean of all pixels, extract the mask from generated images later
-                image[:, :, -1][:] = np.rint(np.mean(image, axis=2)).astype('uint8')[:]
+                # generate the mult mask
+                image = image.astype('float32')
+                image[:, :, -1][:] = (image[:, :, -1] * self._rgba_mult)[:]
+                # get the raw mask, scale
+                raw_mask = np.mean(image, axis=2)
+                lo, hi = 0, ((3 + self._rgba_mult) * 255) / 4
+                raw_mask = (raw_mask - lo) * (255 / (hi - lo))
+                # raw_mask = ((raw_mask - raw_mask.min()) * (1/(raw_mask.max() - raw_mask.min()) * 255))
+                image[:, :, -1][:] = np.rint(raw_mask)[:]
+                image = image.astype('uint8')
                 # debugging purposes
                 # raw_mask = (image[:, :, -1:].astype('float')*4) - np.sum(image[:, :, :-1].astype('float'), axis=2)
                 # mask_quants = np.quantile(raw_mask, [0, 0.5, 1])

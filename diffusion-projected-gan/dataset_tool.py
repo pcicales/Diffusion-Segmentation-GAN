@@ -25,6 +25,9 @@ import imageio
 import click
 import numpy as np
 import PIL.Image
+from PIL import ImageFile
+PIL.Image.MAX_IMAGE_PIXELS = 933120000000
+ImageFile.LOAD_TRUNCATED_IMAGES = True
 from tqdm import tqdm
 
 #----------------------------------------------------------------------------
