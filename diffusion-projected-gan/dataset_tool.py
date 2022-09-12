@@ -238,7 +238,8 @@ def make_transform(
     output_height: Optional[int],
     crop_resize_delta: Optional[int],
     rgba: Optional[bool],
-    lowerlim: Optional[Tuple[int, int]]
+    lower_width: Optional[int],
+    lower_height: Optional[int]
 ) -> Callable[[np.ndarray], Optional[np.ndarray]]:
     def scale(width, height, img):
         w = img.shape[1]
@@ -277,9 +278,10 @@ def make_transform(
         canvas[(width - height) // 2 : (width + height) // 2, :] = img
         return canvas
 
-    def crop_resize(width, height, crop_resize_delta, rgba, img, lower_width, lower_height): # fix
-        if img.shape[1] < lower_width or img.shape[0] < lower_height:
-            return None
+    def crop_resize(width, height, crop_resize_delta, rgba, lower_width, lower_height, img):
+        if (lower_width != None) and (lower_height != None):
+            if img.shape[1] < lower_width or img.shape[0] < lower_height:
+                return None
         if crop_resize_delta != 0:
             img = img[crop_resize_delta:-crop_resize_delta, crop_resize_delta:-crop_resize_delta, :]
         if rgba:
@@ -315,7 +317,7 @@ def make_transform(
     if transform == 'crop-resize':
         if (output_width is None) or (output_height is None):
             error ('must specify --resolution=WxH when using ' + transform + ' transform')
-        return functools.partial(crop_resize, output_width, output_height, crop_resize_delta, rgba)
+        return functools.partial(crop_resize, output_width, output_height, crop_resize_delta, rgba, lower_width, lower_height)
     assert False, 'unknown transform'
 
 #----------------------------------------------------------------------------
@@ -476,6 +478,7 @@ def convert_dataset(
         num_files, input_iter = open_dataset(source_id, max_images=max_images_iter)
 
         if resolution is None: resolution = (None, None)
+        if lowerlim is None: lowerlim = (None, None)
         transform_image = make_transform(transform, *resolution, crop_resize_delta, rgba, *lowerlim)
 
         dataset_attrs = None
