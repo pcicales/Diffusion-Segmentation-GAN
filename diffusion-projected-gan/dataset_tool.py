@@ -23,12 +23,26 @@ from typing import Callable, Optional, Tuple, Union
 import imageio
 
 import click
+import ast
 import numpy as np
 import PIL.Image
 from PIL import ImageFile
 PIL.Image.MAX_IMAGE_PIXELS = 933120000000
 ImageFile.LOAD_TRUNCATED_IMAGES = True
 from tqdm import tqdm
+
+#----------------------------------------------------------------------------
+
+class ConvertStrToList(click.Option):
+    def type_cast_value(self, ctx, value) -> list:
+        try:
+            value = str(value)
+            assert value.count('[') == 1 and value.count(']') == 1
+            list_as_str = value.replace('"', "'").split('[')[1].split(']')[0]
+            list_of_items = [item.strip().strip("'") for item in list_as_str.split(',')]
+            return list_of_items
+        except Exception:
+            raise click.BadParameter(value)
 
 #----------------------------------------------------------------------------
 
@@ -262,10 +276,11 @@ def make_transform(
         canvas[(width - height) // 2 : (width + height) // 2, :] = img
         return canvas
 
-    def crop_resize(width, height, rgba, crop_resize_delta, img): # fix
+    def crop_resize(width, height, crop_resize_delta, rgba, img): # fix
         if img.shape[1] < width or img.shape[0] < height:
             return None
-        img = img[crop_resize_delta:-crop_resize_delta, crop_resize_delta:-crop_resize_delta, :]
+        if crop_resize_delta != 0:
+            img = img[crop_resize_delta:-crop_resize_delta, crop_resize_delta:-crop_resize_delta, :]
         if rgba:
             # need to resize the img and mask separately, avoid lossy outputs
             mask = PIL.Image.fromarray(img[:, :, -1], 'L')
@@ -299,7 +314,7 @@ def make_transform(
     if transform == 'crop-resize':
         if (output_width is None) or (output_height is None):
             error ('must specify --resolution=WxH when using ' + transform + ' transform')
-        return functools.partial(crop_resize, output_width, output_height, rgba, crop_resize_delta)
+        return functools.partial(crop_resize, output_width, output_height, crop_resize_delta, rgba)
     assert False, 'unknown transform'
 
 #----------------------------------------------------------------------------
@@ -358,12 +373,12 @@ def open_dest(dest: str) -> Tuple[str, Callable[[str, Union[bytes, str]], None],
 
 @click.command()
 @click.pass_context
-@click.option('--source', help='Directory or archive name for input dataset', default='/data/public/HULA/GLOM_RGBA', metavar='PATH')
-@click.option('--dest', help='Output directory or archive name for output dataset', default='/data/public/HULA/GLOM_RGBA_SG2/GLOM_RGBA_SG2.zip', metavar='PATH')
+@click.option('--source', help='Directories or archive names for input dataset', cls=ConvertStrToList, default='[/data/public/HULA/GLOM_RGBA,/data/public/HULA/GLOM_RGBA]') # '[/data/public/HULA/GLOM_RGBA,/data/public/HULA/GLOM_RGBA]'
+@click.option('--dest', help='Output directory or archive name for output dataset', default='/data/public/HULA/GLOM_RGBA_SG2/GLOM_RGBA_SG2_test.zip', metavar='PATH')
 @click.option('--max-images', help='Output only up to `max-images` images', type=int, default=None)
 @click.option('--transform', help='Input crop/resize mode', type=click.Choice(['center-crop', 'center-crop-wide', 'crop-resize']), default='crop-resize')
 @click.option('--resolution', help='Output resolution (e.g., \'512x512\')', metavar='WxH', type=parse_tuple, default='512x512')
-@click.option('--crop_resize_delta', help='How many pixels to shave off each side', type=int, default=250)
+@click.option('--crop_resize_delta', help='How many pixels to shave off each side', type=int, default=0)
 @click.option('--rgba', help='Whether or not the dataset is RGBA for seg', type=bool, default=True)
 
 def convert_dataset(
@@ -440,55 +455,71 @@ def convert_dataset(
     if dest == '':
         ctx.fail('--dest output filename or directory must not be an empty string')
 
-    num_files, input_iter = open_dataset(source, max_images=max_images)
-    archive_root_dir, save_bytes, close_dest = open_dest(dest)
-
-    if resolution is None: resolution = (None, None)
-    transform_image = make_transform(transform, *resolution, rgba, crop_resize_delta)
-
-    dataset_attrs = None
+    # we use multiple source directories
+    if max_images != None:
+        max_images_iter = max_images//len(source)
+        print('Taking {} images from each source...'.format(max_images_iter))
+    else:
+        max_images_iter = None
+        print('Taking all images from each source...')
 
     labels = []
-    for idx, image in tqdm(enumerate(input_iter), total=num_files):
-        idx_str = f'{idx:08d}'
-        archive_fname = f'{idx_str[:5]}/img{idx_str}.png'
+    archive_root_dir, save_bytes, close_dest = open_dest(dest)
+    id_counter = 0
 
-        # Apply crop and resize.
-        img = transform_image(image['img'])
+    for source_id in source:
+        print('Getting images/labels from {}...'.format(source_id))
+        num_files, input_iter = open_dataset(source_id, max_images=max_images_iter)
 
-        # Transform may drop images.
-        if img is None:
-            continue
+        if resolution is None: resolution = (None, None)
+        transform_image = make_transform(transform, *resolution, crop_resize_delta, rgba)
 
-        # Error check to require uniform image attributes across
-        # the whole dataset.
-        channels = img.shape[2] if img.ndim == 3 else 1
-        cur_image_attrs = {
-            'width': img.shape[1],
-            'height': img.shape[0],
-            'channels': channels
-        }
-        if dataset_attrs is None:
-            dataset_attrs = cur_image_attrs
-            width = dataset_attrs['width']
-            height = dataset_attrs['height']
-            if width != height:
-                error(f'Image dimensions after scale and crop are required to be square.  Got {width}x{height}')
-            if dataset_attrs['channels'] not in [1, 3, 4]:
-                error('Input images must be stored as RGB, RGBA, or grayscale')
-            if width != 2 ** int(np.floor(np.log2(width))):
-                error('Image width/height after scale and crop are required to be power-of-two')
-        elif dataset_attrs != cur_image_attrs:
-            err = [f'  dataset {k}/cur image {k}: {dataset_attrs[k]}/{cur_image_attrs[k]}' for k in dataset_attrs.keys()] # pylint: disable=unsubscriptable-object
-            error(f'Image {archive_fname} attributes must be equal across all images of the dataset.  Got:\n' + '\n'.join(err))
+        dataset_attrs = None
 
-        # Save the image as an uncompressed PNG.
-        img = PIL.Image.fromarray(img, {1: 'L', 3: 'RGB', 4: 'RGBA'}[channels])
-        image_bits = io.BytesIO()
-        img.save(image_bits, format='png', compress_level=0, optimize=False)
-        save_bytes(os.path.join(archive_root_dir, archive_fname), image_bits.getbuffer())
-        labels.append([archive_fname, image['label']] if image['label'] is not None else None)
+        for idx, image in tqdm(enumerate(input_iter), total=num_files):
+            idx_str = f'{idx + id_counter:08d}'
+            archive_fname = f'{idx_str[:5]}/img{idx_str}.png'
 
+            # Apply crop and resize.
+            img = transform_image(image['img'])
+
+            # Transform may drop images.
+            if img is None:
+                continue
+
+            # Error check to require uniform image attributes across
+            # the whole dataset.
+            channels = img.shape[2] if img.ndim == 3 else 1
+            cur_image_attrs = {
+                'width': img.shape[1],
+                'height': img.shape[0],
+                'channels': channels
+            }
+            if dataset_attrs is None:
+                dataset_attrs = cur_image_attrs
+                width = dataset_attrs['width']
+                height = dataset_attrs['height']
+                if width != height:
+                    error(f'Image dimensions after scale and crop are required to be square.  Got {width}x{height}')
+                if dataset_attrs['channels'] not in [1, 3, 4]:
+                    error('Input images must be stored as RGB, RGBA, or grayscale')
+                if width != 2 ** int(np.floor(np.log2(width))):
+                    error('Image width/height after scale and crop are required to be power-of-two')
+            elif dataset_attrs != cur_image_attrs:
+                err = [f'  dataset {k}/cur image {k}: {dataset_attrs[k]}/{cur_image_attrs[k]}' for k in dataset_attrs.keys()] # pylint: disable=unsubscriptable-object
+                error(f'Image {archive_fname} attributes must be equal across all images of the dataset.  Got:\n' + '\n'.join(err))
+
+            # Save the image as an uncompressed PNG.
+            img = PIL.Image.fromarray(img, {1: 'L', 3: 'RGB', 4: 'RGBA'}[channels])
+            image_bits = io.BytesIO()
+            img.save(image_bits, format='png', compress_level=0, optimize=False)
+            save_bytes(os.path.join(archive_root_dir, archive_fname), image_bits.getbuffer())
+            labels.append([archive_fname, image['label']] if image['label'] is not None else None)
+
+        # add to the idx iter
+        id_counter += num_files
+
+    print('Data generation complete. {} total samples extracted after filtering.'.format(len(labels)))
     metadata = {
         'labels': labels if all(x is not None for x in labels) else None
     }
