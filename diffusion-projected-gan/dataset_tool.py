@@ -238,6 +238,7 @@ def make_transform(
     output_height: Optional[int],
     crop_resize_delta: Optional[int],
     rgba: Optional[bool],
+    lowerlim: Optional[Tuple[int, int]]
 ) -> Callable[[np.ndarray], Optional[np.ndarray]]:
     def scale(width, height, img):
         w = img.shape[1]
@@ -276,8 +277,8 @@ def make_transform(
         canvas[(width - height) // 2 : (width + height) // 2, :] = img
         return canvas
 
-    def crop_resize(width, height, crop_resize_delta, rgba, img): # fix
-        if img.shape[1] < width or img.shape[0] < height:
+    def crop_resize(width, height, crop_resize_delta, rgba, img, lower_width, lower_height): # fix
+        if img.shape[1] < lower_width or img.shape[0] < lower_height:
             return None
         if crop_resize_delta != 0:
             img = img[crop_resize_delta:-crop_resize_delta, crop_resize_delta:-crop_resize_delta, :]
@@ -378,6 +379,7 @@ def open_dest(dest: str) -> Tuple[str, Callable[[str, Union[bytes, str]], None],
 @click.option('--max-images', help='Output only up to `max-images` images', type=int, default=None)
 @click.option('--transform', help='Input crop/resize mode', type=click.Choice(['center-crop', 'center-crop-wide', 'crop-resize']), default='crop-resize')
 @click.option('--resolution', help='Output resolution (e.g., \'512x512\')', metavar='WxH', type=parse_tuple, default='512x512')
+@click.option('--lowerlim', help='Cutoff for native resolution (e.g., \'256x256\')', metavar='WxH', type=parse_tuple, default='256x256')
 @click.option('--crop_resize_delta', help='How many pixels to shave off each side', type=int, default=0)
 @click.option('--rgba', help='Whether or not the dataset is RGBA for seg', type=bool, default=True)
 
@@ -389,7 +391,8 @@ def convert_dataset(
     transform: Optional[str],
     resolution: Optional[Tuple[int, int]],
     crop_resize_delta: int,
-    rgba: bool
+    rgba: bool,
+    lowerlim: Optional[Tuple[int, int]]
 ):
     """Convert an image dataset into a dataset archive usable with StyleGAN2 ADA PyTorch.
 
@@ -423,7 +426,7 @@ def convert_dataset(
         "labels": [
             ["00000/img00000000.png",6],
             ["00000/img00000001.png",9],
-            ... repeated for every image in the datase
+            ... repeated for every image in the dataset
             ["00049/img00049999.png",1]
         ]
     }
@@ -468,11 +471,12 @@ def convert_dataset(
     id_counter = 0
 
     for source_id in source:
+        source_counter = 0
         print('Getting images/labels from {}...'.format(source_id))
         num_files, input_iter = open_dataset(source_id, max_images=max_images_iter)
 
         if resolution is None: resolution = (None, None)
-        transform_image = make_transform(transform, *resolution, crop_resize_delta, rgba)
+        transform_image = make_transform(transform, *resolution, crop_resize_delta, rgba, *lowerlim)
 
         dataset_attrs = None
 
@@ -515,7 +519,10 @@ def convert_dataset(
             img.save(image_bits, format='png', compress_level=0, optimize=False)
             save_bytes(os.path.join(archive_root_dir, archive_fname), image_bits.getbuffer())
             labels.append([archive_fname, image['label']] if image['label'] is not None else None)
+            source_counter += 1
 
+        # print out source stats
+        print('Extracted {} images after filtering for {}'.format(source_counter, source_id))
         # add to the idx iter
         id_counter += num_files
 
