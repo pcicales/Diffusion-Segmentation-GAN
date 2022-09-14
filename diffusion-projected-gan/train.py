@@ -103,10 +103,11 @@ def launch_training(c, desc, outdir, dry_run):
             torch.multiprocessing.spawn(fn=subprocess_fn, args=(c, temp_dir), nprocs=c.num_gpus)
 
 
-def init_dataset_kwargs(data, rgba=False, rgba_mode='mean_extract', rgba_mult=1):
+def init_dataset_kwargs(data, rgba=False, rgba_mode='mean_extract', rgba_mult=1, multi_disc=False, imnet_norm=False):
     try:
         dataset_kwargs = dnnlib.EasyDict(class_name='training.dataset.ImageFolderDataset', path=data, use_labels=True,
-                                         max_size=None, xflip=False, rgba=rgba, rgba_mode=rgba_mode, rgba_mult=rgba_mult)
+                                         max_size=None, xflip=False, rgba=rgba, rgba_mode=rgba_mode, rgba_mult=rgba_mult,
+                                         multi_disc=multi_disc, imnet_norm=imnet_norm)
         dataset_obj = dnnlib.util.construct_class_by_name(**dataset_kwargs) # Subclass of training.dataset.Dataset.
         dataset_kwargs.resolution = dataset_obj.resolution # Be explicit about resolution.
         dataset_kwargs.use_labels = dataset_obj.has_labels # Be explicit about labels.
@@ -143,6 +144,10 @@ def parse_comma_separated_list(s):
 @click.option('--rgba',       help='Whether or not we are generating with mask', metavar='BOOL', type=bool, default=True)
 @click.option('--rgba_mode',  help='How we encode our masks', metavar='STR', type=click.Choice(['mean_extract', 'naive']), default='mean_extract')
 @click.option('--rgba_mult',  help='What multiplier to use on binary mask', metavar='INT', type=int, default=3)
+@click.option('--multi_disc',  help='One n channel disc (False) or two 3 channel disc (True)', metavar='BOOL', type=bool, default=True)
+
+# Projection config
+@click.option('--imnet_norm',  help='Use imagenet normalization when computing stats', metavar='BOOL', type=bool, default=True)
 
 # Optional features.
 @click.option('--cond',         help='Train conditional model', metavar='BOOL',                 type=bool, default=False, show_default=True)
@@ -166,7 +171,7 @@ def parse_comma_separated_list(s):
 @click.option('--seed',         help='Random seed', metavar='INT',                              type=click.IntRange(min=0), default=0, show_default=True)
 @click.option('--fp32',         help='Disable mixed-precision', metavar='BOOL',                 type=bool, default=False, show_default=True)
 @click.option('--nobench',      help='Disable cuDNN benchmarking', metavar='BOOL',              type=bool, default=False, show_default=True)
-@click.option('--workers',      help='DataLoader worker processes', metavar='INT',              type=click.IntRange(min=1), default=3, show_default=True)
+@click.option('--workers',      help='DataLoader worker processes', metavar='INT',              type=click.IntRange(min=1), default=16, show_default=True)
 @click.option('-n','--dry-run', help='Print training options and exit',                         is_flag=True)
 @click.option('--restart_every',help='Time interval in seconds to restart code', metavar='INT', type=int, default=9999999, show_default=True)
 
@@ -182,7 +187,9 @@ def main(**kwargs):
     c.ada_kimg = opts.ada_kimg
 
     # Training set.
-    c.training_set_kwargs, dataset_name = init_dataset_kwargs(data=opts.data, rgba=opts.rgba, rgba_mode=opts.rgba_mode, rgba_mult=opts.rgba_mult)
+    c.training_set_kwargs, dataset_name = init_dataset_kwargs(data=opts.data, rgba=opts.rgba,
+                                                              rgba_mode=opts.rgba_mode, rgba_mult=opts.rgba_mult,
+                                                              multi_disc=opts.multi_disc, imnet_norm=opts.imnet_norm)
     if opts.cond and not c.training_set_kwargs.use_labels:
         raise click.ClickException('--cond=True requires labels specified in dataset.json')
     c.training_set_kwargs.use_labels = opts.cond
@@ -242,7 +249,10 @@ def main(**kwargs):
         c.cudnn_benchmark = False
 
     # Description string.
-    desc = f'{opts.cfg:s}-{dataset_name:s}-gpus{c.num_gpus:d}-batch{c.batch_size:d}-d_pos-{opts.d_pos}-noise_sd-{opts.noise_sd}'
+    if opts.rgba:
+        desc = f'{opts.cfg:s}-{dataset_name:s}-gpus{c.num_gpus:d}-batch{c.batch_size:d}-d_pos-{opts.d_pos}-noise_sd-{opts.noise_sd}-imnet_norm-{opts.imnet_norm}-rgba-{opts.rgba}-rgba_mode-{opts.rgba_mode}-multi_disc-{opts.multi_disc}'
+    else:
+        desc = f'{opts.cfg:s}-{dataset_name:s}-gpus{c.num_gpus:d}-batch{c.batch_size:d}-d_pos-{opts.d_pos}-noise_sd-{opts.noise_sd}-imnet_norm-{opts.imnet_norm}'
     if opts.d_pos:
         desc += f"-target{opts.target}"
     if opts.ada_kimg:

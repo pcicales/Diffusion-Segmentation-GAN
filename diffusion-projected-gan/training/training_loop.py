@@ -216,6 +216,7 @@ def training_loop(
     __BATCH_IDX__ = torch.tensor(0, dtype=torch.long, device=device)
     __PL_MEAN__ = torch.zeros([], device=device)
     best_fid = 9999
+    best_mask_fid = 9999
 
     # Load training set.
     if rank == 0:
@@ -233,7 +234,10 @@ def training_loop(
     # Construct networks.
     if rank == 0:
         print('Constructing networks...')
-    common_kwargs = dict(c_dim=training_set.label_dim, img_resolution=training_set.resolution, img_channels=training_set.num_channels, rgba=training_set_kwargs['rgba'], rgba_mode=training_set_kwargs['rgba_mode'])
+    common_kwargs = dict(c_dim=training_set.label_dim, img_resolution=training_set.resolution,
+                         img_channels=training_set.num_channels, rgba=training_set_kwargs['rgba'],
+                         rgba_mode=training_set_kwargs['rgba_mode'], multi_disc=training_set_kwargs['multi_disc'],
+                         imnet_norm=training_set_kwargs['imnet_norm'])
     G = dnnlib.util.construct_class_by_name(**G_kwargs, **common_kwargs).train().requires_grad_(False).to(device) # subclass of torch.nn.Module
     D = dnnlib.util.construct_class_by_name(**D_kwargs, **common_kwargs).train().requires_grad_(False).to(device) # subclass of torch.nn.Module
     G_ema = copy.deepcopy(G).eval()
@@ -256,7 +260,8 @@ def training_loop(
             __CUR_TICK__ = resume_data['progress']['cur_tick'].to(device)
             __BATCH_IDX__ = resume_data['progress']['batch_idx'].to(device)
             __PL_MEAN__ = resume_data['progress'].get('pl_mean', torch.zeros([])).to(device)
-            best_fid = resume_data['progress']['best_fid']       # only needed for rank == 0
+            best_fid = resume_data['progress']['best_fid']     # only needed for rank == 0
+            best_mask_fid = resume_data['progress']['best_mask_fid']
             D.feature_network.diffusion.p = float(resume_data['progress']['cur_p'][0])
 
         del resume_data
@@ -499,13 +504,23 @@ def training_loop(
                 done or cur_tick % network_snapshot_ticks == 0):
             snapshot_pkl = misc.get_ckpt_path(run_dir)
             # save as tensors to avoid error for multi GPU
-            snapshot_data['progress'] = {
-                'cur_nimg': torch.LongTensor([cur_nimg]),
-                'cur_tick': torch.LongTensor([cur_tick]),
-                'cur_p': torch.FloatTensor([D.feature_network.diffusion.p]),
-                'batch_idx': torch.LongTensor([batch_idx]),
-                'best_fid': best_fid,
-            }
+            if training_set_kwargs['rgba']:
+                snapshot_data['progress'] = {
+                    'cur_nimg': torch.LongTensor([cur_nimg]),
+                    'cur_tick': torch.LongTensor([cur_tick]),
+                    'cur_p': torch.FloatTensor([D.feature_network.diffusion.p]),
+                    'batch_idx': torch.LongTensor([batch_idx]),
+                    'best_fid': best_fid,
+                    'best_mask_fid': best_mask_fid
+                }
+            else:
+                snapshot_data['progress'] = {
+                    'cur_nimg': torch.LongTensor([cur_nimg]),
+                    'cur_tick': torch.LongTensor([cur_tick]),
+                    'cur_p': torch.FloatTensor([D.feature_network.diffusion.p]),
+                    'batch_idx': torch.LongTensor([batch_idx]),
+                    'best_fid': best_fid,
+                }
             if hasattr(loss, 'pl_mean'):
                 snapshot_data['progress']['pl_mean'] = loss.pl_mean.cpu()
 
@@ -536,6 +551,20 @@ def training_loop(
                     # save curr iteration number (directly saving it to pkl leads to problems with multi GPU)
                     with open(cur_nimg_txt, 'w') as f:
                         f.write(f"nimg: {cur_nimg} best_fid: {best_fid}")
+
+            # save best mask fid ckpt
+            if training_set_kwargs['rgba']:
+                snapshot_pkl_mask = os.path.join(run_dir, f'best_mask_model.pkl')
+                cur_nimg_txt_mask = os.path.join(run_dir, f'best_mask_nimg.txt')
+                if rank == 0:
+                    if 'fid50k_seg_full' in stats_metrics and stats_metrics['fid50k_seg_full'] < best_mask_fid:
+                        best_mask_fid = stats_metrics['fid50k_seg_full']
+
+                        with open(snapshot_pkl_mask, 'wb') as f:
+                            dill.dump(snapshot_data, f)
+                        # save curr iteration number (directly saving it to pkl leads to problems with multi GPU)
+                        with open(cur_nimg_txt_mask, 'w') as f:
+                            f.write(f"nimg: {cur_nimg} best_mask_fid: {best_mask_fid}")
 
         del snapshot_data # conserve memory
 

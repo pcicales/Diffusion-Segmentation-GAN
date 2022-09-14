@@ -34,7 +34,9 @@ class Dataset(torch.utils.data.Dataset):
         random_seed = 1,        # Random seed to use when applying max_size.
         rgba = False,
         rgba_mode = '',
-        rgba_mult = 1
+        rgba_mult = 1,
+        multi_disc = False,
+        imnet_norm = False
     ):
         self._name = name
         self._raw_shape = list(raw_shape)
@@ -44,6 +46,8 @@ class Dataset(torch.utils.data.Dataset):
         self._rgba = rgba
         self._rgba_mode = rgba_mode
         self._rgba_mult = rgba_mult
+        self._multi_disc = multi_disc
+        self._imnet_norm = imnet_norm
 
         # Apply max_size.
         self._raw_idx = np.arange(self._raw_shape[0], dtype=np.int64)
@@ -184,6 +188,8 @@ class ImageFolderDataset(Dataset):
         self._rgba = super_kwargs['rgba']
         self._rgba_mode = super_kwargs['rgba_mode']
         self._rgba_mult = super_kwargs['rgba_mult']
+        self._multi_disc = super_kwargs['multi_disc']
+        self._imnet_norm = super_kwargs['imnet_norm']
 
         if os.path.isdir(self._path):
             self._type = 'dir'

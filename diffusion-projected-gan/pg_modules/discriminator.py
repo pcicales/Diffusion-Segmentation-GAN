@@ -1,6 +1,7 @@
 from functools import partial
 import numpy as np
 import torch
+import torchvision.transforms as transforms
 import torch.nn as nn
 import torch.nn.functional as F
 
@@ -154,6 +155,8 @@ class ProjectedDiscriminator(torch.nn.Module):
         interp224=True,
         rgba=False,
         rgba_mode='',
+        multi_disc=False,
+        imnet_norm=False,
         backbone_kwargs={},
         **kwargs
     ):
@@ -161,30 +164,76 @@ class ProjectedDiscriminator(torch.nn.Module):
         self.diffaug = diffaug
         self.rgba = rgba
         self.rgba_mode = rgba_mode
+        self.multi_disc = multi_disc
+        self.imnet_norm = imnet_norm
         self.interp224 = interp224
-        self.feature_network = F_RandomProj(rgba=rgba, rgba_mode=rgba_mode, **backbone_kwargs)
+
+        # if self.imnet_norm:
+        #     self.normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
+        #                                      std=[0.229, 0.224, 0.225])
+
+        self.feature_network = F_RandomProj(rgba=rgba, rgba_mode=rgba_mode, multi_disc=multi_disc, **backbone_kwargs)
         self.discriminator = MultiScaleD(
             channels=self.feature_network.CHANNELS,
             resolutions=self.feature_network.RESOLUTIONS,
             **backbone_kwargs,
         )
+        if self.rgba and self.multi_disc:
+            self.mask_discriminator = MultiScaleD(
+                channels=self.feature_network.CHANNELS,
+                resolutions=self.feature_network.RESOLUTIONS,
+                **backbone_kwargs,
+            )
 
     def train(self, mode=True):
         self.feature_network = self.feature_network.train(False)
         self.discriminator = self.discriminator.train(mode)
+        if self.rgba and self.multi_disc:
+            self.mask_discriminator = self.mask_discriminator.train(mode)
         return self
 
     def eval(self):
         return self.train(False)
 
     def forward(self, x, c):
-        if self.diffaug:
-            x = DiffAugment(x, policy='color,translation,cutout')
 
-        if self.interp224:
-            x = F.interpolate(x, 224, mode='bilinear', align_corners=False)
+        # if we are using multi disc, we need to get the outputs for both discriminators
+        if self.rgba and self.multi_disc:
+            emask = x[:, -1:, ...].repeat([1, 3, 1, 1]) #.expand(x.shape[0], 3, x.shape[2], x.shape[3])
+            x = x[:, :-1, ...]
+            if self.diffaug:
+                x = DiffAugment(x, policy='color,translation,cutout')
+                emask = DiffAugment(emask, policy='color,translation,cutout')
 
-        features = self.feature_network(x)
-        logits = self.discriminator(features, c)
+            if self.interp224:
+                x = F.interpolate(x, 224, mode='bilinear', align_corners=False)
+                emask = F.interpolate(emask, 224, mode='bilinear', align_corners=False) # fix
 
-        return logits
+            # if self.imnet_norm:
+            #     x = self.normalize(x)
+            #     emask = self.normalize(emask)
+
+            features = self.feature_network(x)
+            mask_features = self.feature_network(emask)
+            logits = self.discriminator(features, c)
+            mask_logits = self.mask_discriminator(mask_features, c)
+
+            # cat logits, may need to keep these separate after testing
+            logits = torch.cat((logits, mask_logits), dim=1)
+
+            return logits
+
+        else:
+            if self.diffaug:
+                x = DiffAugment(x, policy='color,translation,cutout')
+
+            if self.interp224:
+                x = F.interpolate(x, 224, mode='bilinear', align_corners=False)
+
+            # if self.imnet_norm:
+            #     x = self.normalize(x)
+
+            features = self.feature_network(x)
+            logits = self.discriminator(features, c)
+
+            return logits

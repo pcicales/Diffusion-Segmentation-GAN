@@ -16,7 +16,7 @@ import copy
 import uuid
 import numpy as np
 import torch
-from torchvision import transforms
+import torchvision.transforms as transforms
 import dnnlib
 from tqdm import tqdm
 
@@ -38,6 +38,7 @@ class MetricOptions:
         self.snapshot_pkl = snapshot_pkl
         self.rgba = dataset_kwargs['rgba']
         self.rgba_mode = dataset_kwargs['rgba_mode']
+        self.imnet_norm = dataset_kwargs['imnet_norm']
 
 #----------------------------------------------------------------------------
 
@@ -205,6 +206,10 @@ def compute_feature_stats_for_dataset(opts, detector_url, detector_kwargs, rel_l
     if data_loader_kwargs is None:
         data_loader_kwargs = dict(pin_memory=True, num_workers=3, prefetch_factor=2)
 
+    if opts.imnet_norm:
+        normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
+                                             std=[0.229, 0.224, 0.225])
+
     # Try to lookup from cache.
     cache_file = None
     cache_seg_file = None
@@ -287,13 +292,22 @@ def compute_feature_stats_for_dataset(opts, detector_url, detector_kwargs, rel_l
             raw_images[:] = images[:, :-1, :, :][:]
             raw_masks[:] = images[:, -1:, :, :].repeat([1, 3, 1, 1])[:]
 
-            # # scale the images to 0-255
-            # images = (raw_images - lo) * (255 / (hi - lo))
-            # masks = (raw_masks - lo) * (255 / (hi - lo))
+            if opts.imnet_norm: # try this
+                raw_images = normalize(raw_images/255.)
+                raw_masks = normalize(raw_masks/255.)
 
-            # round and clamp as needed
-            raw_images.to(torch.uint8)
-            raw_masks.to(torch.uint8)
+                # # scale the images to 0-255
+                # images = (raw_images - lo) * (255 / (hi - lo))
+                # masks = (raw_masks - lo) * (255 / (hi - lo))
+                #
+                # # round and clamp as needed
+                # raw_images = raw_images.round().clamp(0, 255).to(torch.uint8)
+                # raw_masks = raw_masks.round().clamp(0, 255).to(torch.uint8)
+
+            else:
+                # round and clamp as needed
+                raw_images.to(torch.uint8)
+                raw_masks.to(torch.uint8)
 
             with torch.no_grad():
                 img_features = detector(raw_images.to(opts.device), **detector_kwargs)
@@ -323,12 +337,11 @@ def compute_feature_stats_for_dataset(opts, detector_url, detector_kwargs, rel_l
             if images.shape[1] == 1: # assumes single channel to rgb, adjust this all later
                 images = images.repeat([1, 3, 1, 1])
 
-            # scale the images to 0-255
-            for gen_id in range(images.shape[0]):
-                images[gen_id] = ((images[gen_id] - images[gen_id].min()) / (images[gen_id].max() - images[gen_id].min())) * 255
-
-            # round and clamp as needed
-            images.round().clamp(0, 255).to(torch.uint8)
+            if opts.imnet_norm: # try this
+                images = normalize(images/255.)
+            else:
+                # round and clamp as needed
+                images = images.round().clamp(0, 255).to(torch.uint8)
 
             with torch.no_grad():
                 features = detector(images.to(opts.device), **detector_kwargs)
@@ -354,6 +367,10 @@ def compute_feature_stats_for_generator(opts, detector_url, detector_kwargs, rel
     # Setup generator and labels.
     G = copy.deepcopy(opts.G).eval().requires_grad_(False).to(opts.device)
     c_iter = iterate_random_labels(opts=opts, batch_size=batch_gen)
+
+    if opts.imnet_norm:
+        normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
+                                             std=[0.229, 0.224, 0.225])
 
     # Initialize.
     # we want to generate stats for both images and masks if we are in seg mode
@@ -399,16 +416,26 @@ def compute_feature_stats_for_generator(opts, detector_url, detector_kwargs, rel
                 raw_masks[:] = images[:, -1:, :, :].repeat([1, 3, 1, 1])[:]
 
                 # scale the images to 0-255
-                images = (raw_images - lo) * (255 / (hi - lo))
-                masks = (raw_masks - lo) * (255 / (hi - lo))
+                images_out = (raw_images - lo) * (255 / (hi - lo))
+                masks_out = (raw_masks - lo) * (255 / (hi - lo))
 
                 # round and clamp as needed
-                images.round().clamp(0, 255).to(torch.uint8)
-                masks.round().clamp(0, 255).to(torch.uint8)
+                images_out = images_out.round().clamp(0, 255).to(torch.uint8)
+                masks_out = masks_out.round().clamp(0, 255).to(torch.uint8)
 
-                # append them as needed
-                images_full.append(images)
-                masks_full.append(masks)
+                # normalize
+                if opts.imnet_norm:  # try this
+                    images_out = normalize(images_out/255.)
+                    masks_out = normalize(masks_out/255.)
+
+                    # append them as needed
+                    images_full.append(images_out)
+                    masks_full.append(masks_out)
+
+                else:
+                    # append them as needed
+                    images_full.append(images_out)
+                    masks_full.append(masks_out)
 
             # get the input tensors
             images = torch.cat(images_full)
@@ -437,16 +464,22 @@ def compute_feature_stats_for_generator(opts, detector_url, detector_kwargs, rel
                 # get the image outputs
                 img = G(z=z, c=next(c_iter), **opts.G_kwargs)
 
-                # imagenet normalize
+                # this shouldnt happen with generator? but will leave it...
                 if img.shape[1] == 1:
                     img = img.repeat([1, 3, 1, 1])
 
                 # scale the images to 0-255
-                for gen_id in range(img.shape[0]):
-                    img[gen_id] = ((img[gen_id] - img[gen_id].min()) / (img[gen_id].max() - img[gen_id].min())) * 255
+                img = (img - lo) * (255 / (hi - lo))
 
-                # append them as needed
-                images.append(img.round().clamp(0, 255).to(torch.uint8))
+                # round and clamp as needed
+                img = img.round().clamp(0, 255).to(torch.uint8)
+
+                if opts.imnet_norm:  # try this
+                    img = normalize(img/255.)
+                    images.append(img)
+
+                else:
+                    images.append(img)
 
             # get the input tensor
             images = torch.cat(images)

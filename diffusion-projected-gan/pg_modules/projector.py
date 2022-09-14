@@ -43,9 +43,9 @@ def _make_efficientnet(model):
     return pretrained
 
 
-def calc_channels(pretrained, inp_res=224, rgba=False, rgba_mode=''):
+def calc_channels(pretrained, inp_res=224, rgba=False, rgba_mode='', multi_disc=False):
     channels = []
-    if rgba:
+    if rgba and not multi_disc:
         tmp = torch.zeros(1, 4, inp_res, inp_res)
     else:
         tmp = torch.zeros(1, 3, inp_res, inp_res)
@@ -63,12 +63,12 @@ def calc_channels(pretrained, inp_res=224, rgba=False, rgba_mode=''):
     return channels
 
 
-def _make_projector(im_res, cout, proj_type, expand=False, rgba=False, rgba_mode=''):
+def _make_projector(im_res, cout, proj_type, expand=False, rgba=False, rgba_mode='', multi_disc=False, imnet_norm=False):
     assert proj_type in [0, 1, 2], "Invalid projection type"
 
     ### Build pretrained feature network
     model = timm.create_model('tf_efficientnet_lite0', pretrained=True)
-    if rgba:
+    if rgba and not multi_disc:
         # change to 4 channel input
         model.conv_stem.in_channels = 4
         # experimenting with assigning a pretrained weight to the fourth dim...
@@ -81,7 +81,7 @@ def _make_projector(im_res, cout, proj_type, expand=False, rgba=False, rgba_mode
     # independent of the dataset resolution
     im_res = 256
     pretrained.RESOLUTIONS = [im_res//4, im_res//8, im_res//16, im_res//32]
-    pretrained.CHANNELS = calc_channels(pretrained, rgba=rgba, rgba_mode=rgba_mode)
+    pretrained.CHANNELS = calc_channels(pretrained, rgba=rgba, rgba_mode=rgba_mode, multi_disc=multi_disc)
 
     if proj_type == 0: return pretrained, None
 
@@ -118,6 +118,8 @@ class F_RandomProj(nn.Module):
         noise_sd=0.5,
         rgba=False,
         rgba_mode='',
+        multi_disc=False,
+        imnet_norm=False,
         **kwargs,
     ):
         super().__init__()
@@ -126,13 +128,17 @@ class F_RandomProj(nn.Module):
         self.expand = expand
         self.rgba = rgba
         self.rgba_mode = rgba_mode
+        self.multi_disc = multi_disc
+        self.imnet_norm = imnet_norm
 
         self.d_pos = d_pos
         self.noise_sd = noise_sd
         # self.diffusion = AugmentPipe(t_max=1000)
         self.diffusion = Diffusion(t_min=5, t_max=500, beta_start=1e-4, beta_end=1e-2)
         # build pretrained feature network and random decoder (scratch)
-        self.pretrained, self.scratch = _make_projector(im_res=im_res, cout=self.cout, proj_type=self.proj_type, expand=self.expand, rgba=rgba, rgba_mode=rgba_mode)
+        self.pretrained, self.scratch = _make_projector(im_res=im_res, cout=self.cout, proj_type=self.proj_type,
+                                                        expand=self.expand, rgba=rgba, rgba_mode=rgba_mode,
+                                                        multi_disc=multi_disc, imnet_norm=imnet_norm)
         self.CHANNELS = self.pretrained.CHANNELS
         self.RESOLUTIONS = self.pretrained.RESOLUTIONS
 
