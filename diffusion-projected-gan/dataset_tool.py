@@ -280,7 +280,7 @@ def make_transform(
 
     def crop_resize(width, height, crop_resize_delta, rgba, lower_width, lower_height, img):
         if (lower_width != None) and (lower_height != None):
-            if img.shape[1] < lower_width or img.shape[0] < lower_height:
+            if img.shape[1] < lower_width or img.shape[re0] < lower_height:
                 return None
         if crop_resize_delta != 0:
             img = img[crop_resize_delta:-crop_resize_delta, crop_resize_delta:-crop_resize_delta, :]
