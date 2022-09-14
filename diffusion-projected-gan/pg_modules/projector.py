@@ -45,10 +45,8 @@ def _make_efficientnet(model):
 
 def calc_channels(pretrained, inp_res=224, rgba=False, rgba_mode='', multi_disc=False):
     channels = []
-    if rgba and not multi_disc:
-        tmp = torch.zeros(1, 4, inp_res, inp_res)
-    else:
-        tmp = torch.zeros(1, 3, inp_res, inp_res)
+
+    tmp = torch.zeros(1, 3, inp_res, inp_res)
 
     # forward pass
     tmp = pretrained.layer0(tmp)
@@ -68,11 +66,7 @@ def _make_projector(im_res, cout, proj_type, expand=False, rgba=False, rgba_mode
 
     ### Build pretrained feature network
     model = timm.create_model('tf_efficientnet_lite0', pretrained=True)
-    if rgba and not multi_disc:
-        # change to 4 channel input
-        model.conv_stem.in_channels = 4
-        # experimenting with assigning a pretrained weight to the fourth dim...
-        model.conv_stem.weight = torch.nn.Parameter(torch.cat((model.conv_stem.weight, model.conv_stem.weight[:, :-2, :, :]), dim=1))
+
     pretrained = _make_efficientnet(model)
 
     # determine resolution of feature maps, this is later used to calculate the number

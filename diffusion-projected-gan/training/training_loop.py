@@ -276,8 +276,12 @@ def training_loop(
     # Setup augmentation.
     if rank == 0:
         print('Setting up augmentation...')
-        # TODO: add augmentation
-    ada_stats = training_stats.Collector(regex='Loss/signs/real')
+    if training_set_kwargs['multi_disc']:
+        ada_img_stats = training_stats.Collector(regex='Loss/signs_img/real')
+        ada_mask_stats = training_stats.Collector(regex='Loss/signs_mask/real')
+    else:
+        ada_stats = training_stats.Collector(regex='Loss/signs/real')
+
 
     # Distribute across GPUs.
     if rank == 0:
@@ -290,7 +294,7 @@ def training_loop(
     # Setup training phases.
     if rank == 0:
         print('Setting up training phases...')
-    loss = dnnlib.util.construct_class_by_name(device=device, G=G, G_ema=G_ema, D=D, **loss_kwargs) # subclass of training.loss.Loss
+    loss = dnnlib.util.construct_class_by_name(device=device, G=G, G_ema=G_ema, D=D, multi_disc=training_set_kwargs['multi_disc'], **loss_kwargs) # subclass of training.loss.Loss
     phases = []
     for name, module, opt_kwargs, reg_interval in [('G', G, G_opt_kwargs, G_reg_interval), ('D', D, D_opt_kwargs, D_reg_interval)]:
         if reg_interval is None:
@@ -433,11 +437,20 @@ def training_loop(
         batch_idx += 1
 
         # Execute ADA heuristic.
-        if (ada_stats is not None) and (batch_idx % ada_interval == 0):
-            ada_stats.update()
-            adjust = np.sign(ada_stats['Loss/signs/real'] - target) * (batch_size * ada_interval) / (ada_kimg * 1000)
-            D.feature_network.diffusion.p = (D.feature_network.diffusion.p + adjust).clip(min=0., max=1.)
-            D.feature_network.diffusion.update_T()
+        if training_set_kwargs['multi_disc']:
+            if (ada_img_stats is not None) and (ada_mask_stats is not None) and (batch_idx % ada_interval == 0):
+                ada_img_stats.update()
+                ada_mask_stats.update()
+                img_adjust = np.sign(ada_img_stats['Loss/signs_img/real'] - target) * (batch_size * ada_interval) / (ada_kimg * 1000)
+                mask_adjust = np.sign(ada_mask_stats['Loss/signs_mask/real'] - target) * (batch_size * ada_interval) / (ada_kimg * 1000)
+                D.feature_network.diffusion.p = (D.feature_network.diffusion.p + max(img_adjust, mask_adjust)).clip(min=0., max=1.)
+                D.feature_network.diffusion.update_T()
+        else:
+            if (ada_stats is not None) and (batch_idx % ada_interval == 0):
+                ada_stats.update()
+                adjust = np.sign(ada_stats['Loss/signs/real'] - target) * (batch_size * ada_interval) / (ada_kimg * 1000)
+                D.feature_network.diffusion.p = (D.feature_network.diffusion.p + adjust).clip(min=0., max=1.)
+                D.feature_network.diffusion.update_T()
 
         # Perform maintenance tasks once per tick.
         done = (cur_nimg >= total_kimg * 1000)

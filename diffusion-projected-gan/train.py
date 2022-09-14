@@ -144,7 +144,7 @@ def parse_comma_separated_list(s):
 @click.option('--rgba',       help='Whether or not we are generating with mask', metavar='BOOL', type=bool, default=True)
 @click.option('--rgba_mode',  help='How we encode our masks', metavar='STR', type=click.Choice(['mean_extract', 'naive']), default='mean_extract')
 @click.option('--rgba_mult',  help='What multiplier to use on binary mask', metavar='INT', type=int, default=3)
-@click.option('--multi_disc',  help='One n channel disc (False) or two 3 channel disc (True)', metavar='BOOL', type=bool, default=True)
+@click.option('--multi_disc',  help='One 3 channel disc (False) or two 3 channel disc (True)', metavar='BOOL', type=bool, default=True)
 
 # Projection config
 @click.option('--imnet_norm',  help='Use imagenet normalization when computing stats', metavar='BOOL', type=bool, default=True)

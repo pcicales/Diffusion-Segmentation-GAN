@@ -201,6 +201,7 @@ class ProjectedDiscriminator(torch.nn.Module):
         if self.rgba and self.multi_disc:
             emask = x[:, -1:, ...].repeat([1, 3, 1, 1]) #.expand(x.shape[0], 3, x.shape[2], x.shape[3])
             x = x[:, :-1, ...]
+            base_batch = x.shape[0]
             if self.diffaug:
                 x = DiffAugment(x, policy='color,translation,cutout')
                 emask = DiffAugment(emask, policy='color,translation,cutout')
@@ -213,13 +214,39 @@ class ProjectedDiscriminator(torch.nn.Module):
             #     x = self.normalize(x)
             #     emask = self.normalize(emask)
 
+            # make a cat tensor to speed up feature extraction
+            x = torch.cat((x, emask), dim=0)
             features = self.feature_network(x)
-            mask_features = self.feature_network(emask)
-            logits = self.discriminator(features, c)
+            mask_features = {key: out_feat[base_batch:, ...] for key, out_feat in zip(features.keys(), features.values())}
+            img_features = {key: out_feat[:base_batch, ...] for key, out_feat in zip(features.keys(), features.values())}
+            logits = self.discriminator(img_features, c)
             mask_logits = self.mask_discriminator(mask_features, c)
 
             # cat logits, may need to keep these separate after testing
             logits = torch.cat((logits, mask_logits), dim=1)
+
+            return logits
+
+        elif self.rgba and not self.multi_disc:
+            emask = x[:, -1:, ...].repeat([1, 3, 1, 1]) #.expand(x.shape[0], 3, x.shape[2], x.shape[3])
+            x = x[:, :-1, ...]
+            base_batch = x.shape[0]
+            if self.diffaug:
+                x = DiffAugment(x, policy='color,translation,cutout')
+                emask = DiffAugment(emask, policy='color,translation,cutout')
+
+            if self.interp224:
+                x = F.interpolate(x, 224, mode='bilinear', align_corners=False)
+                emask = F.interpolate(emask, 224, mode='bilinear', align_corners=False) # fix
+
+            # if self.imnet_norm:
+            #     x = self.normalize(x)
+            #     emask = self.normalize(emask)
+
+            # make a cat tensor to speed up feature extraction
+            x = torch.cat((x, emask), dim=0)
+            features = self.feature_network(x)
+            logits = self.discriminator(features, c)
 
             return logits
 
