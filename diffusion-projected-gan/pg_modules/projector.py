@@ -6,7 +6,7 @@ from pg_modules.blocks import FeatureFusionBlock
 from pg_modules.diffusion import Diffusion
 
 
-def _make_scratch_ccm(scratch, in_channels, cout, expand=False):
+def _make_scratch_ccm(scratch, in_channels, cout, expand=False, rgba=False, multi_disc=False):
     # shapes
     out_channels = [cout, cout*2, cout*4, cout*8] if expand else [cout]*4
 
@@ -20,7 +20,7 @@ def _make_scratch_ccm(scratch, in_channels, cout, expand=False):
     return scratch
 
 
-def _make_scratch_csm(scratch, in_channels, cout, expand):
+def _make_scratch_csm(scratch, in_channels, cout, expand, rgba=False, multi_disc=False):
     scratch.layer3_csm = FeatureFusionBlock(in_channels[3], nn.ReLU(False), expand=expand, lowest=True)
     scratch.layer2_csm = FeatureFusionBlock(in_channels[2], nn.ReLU(False), expand=expand)
     scratch.layer1_csm = FeatureFusionBlock(in_channels[1], nn.ReLU(False), expand=expand)
@@ -81,13 +81,13 @@ def _make_projector(im_res, cout, proj_type, expand=False, rgba=False, rgba_mode
 
     ### Build CCM
     scratch = nn.Module()
-    scratch = _make_scratch_ccm(scratch, in_channels=pretrained.CHANNELS, cout=cout, expand=expand)
+    scratch = _make_scratch_ccm(scratch, in_channels=pretrained.CHANNELS, cout=cout, expand=expand, rgba=rgba, multi_disc=multi_disc)
     pretrained.CHANNELS = scratch.CHANNELS
 
     if proj_type == 1: return pretrained, scratch
 
     ### build CSM
-    scratch = _make_scratch_csm(scratch, in_channels=scratch.CHANNELS, cout=cout, expand=expand)
+    scratch = _make_scratch_csm(scratch, in_channels=scratch.CHANNELS, cout=cout, expand=expand, rgba=rgba, multi_disc=multi_disc)
 
     # CSM upsamples x2 so the feature map resolution doubles
     pretrained.RESOLUTIONS = [res*2 for res in pretrained.RESOLUTIONS]

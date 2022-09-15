@@ -168,18 +168,26 @@ class ProjectedDiscriminator(torch.nn.Module):
         self.imnet_norm = imnet_norm
         self.interp224 = interp224
 
-        # if self.imnet_norm:
-        #     self.normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
-        #                                      std=[0.229, 0.224, 0.225])
-
         self.feature_network = F_RandomProj(rgba=rgba, rgba_mode=rgba_mode, multi_disc=multi_disc, **backbone_kwargs)
-        self.discriminator = MultiScaleD(
-            channels=self.feature_network.CHANNELS,
-            resolutions=self.feature_network.RESOLUTIONS,
-            **backbone_kwargs,
-        )
         if self.rgba and self.multi_disc:
+            self.discriminator = MultiScaleD(
+                channels=self.feature_network.CHANNELS,
+                resolutions=self.feature_network.RESOLUTIONS,
+                **backbone_kwargs,
+            )
             self.mask_discriminator = MultiScaleD(
+                channels=self.feature_network.CHANNELS,
+                resolutions=self.feature_network.RESOLUTIONS,
+                **backbone_kwargs,
+            )
+        elif self.rgba and not self.multi_disc:
+            self.discriminator = MultiScaleD(
+                channels=[chan * 2 for chan in self.feature_network.CHANNELS],
+                resolutions=self.feature_network.RESOLUTIONS,
+                **backbone_kwargs,
+            )
+        else:
+            self.discriminator = MultiScaleD(
                 channels=self.feature_network.CHANNELS,
                 resolutions=self.feature_network.RESOLUTIONS,
                 **backbone_kwargs,
@@ -210,10 +218,6 @@ class ProjectedDiscriminator(torch.nn.Module):
                 x = F.interpolate(x, 224, mode='bilinear', align_corners=False)
                 emask = F.interpolate(emask, 224, mode='bilinear', align_corners=False) # fix
 
-            # if self.imnet_norm:
-            #     x = self.normalize(x)
-            #     emask = self.normalize(emask)
-
             # make a cat tensor to speed up feature extraction
             x = torch.cat((x, emask), dim=0)
             features = self.feature_network(x)
@@ -228,24 +232,23 @@ class ProjectedDiscriminator(torch.nn.Module):
             return logits
 
         elif self.rgba and not self.multi_disc:
-            emask = x[:, -1:, ...].repeat([1, 3, 1, 1]) #.expand(x.shape[0], 3, x.shape[2], x.shape[3])
-            x = x[:, :-1, ...]
-            base_batch = x.shape[0]
             if self.diffaug:
                 x = DiffAugment(x, policy='color,translation,cutout')
-                emask = DiffAugment(emask, policy='color,translation,cutout')
 
             if self.interp224:
                 x = F.interpolate(x, 224, mode='bilinear', align_corners=False)
-                emask = F.interpolate(emask, 224, mode='bilinear', align_corners=False) # fix
 
-            # if self.imnet_norm:
-            #     x = self.normalize(x)
-            #     emask = self.normalize(emask)
+            emask = x[:, -1:, ...].repeat([1, 3, 1, 1]) #.expand(x.shape[0], 3, x.shape[2], x.shape[3])
+            x = x[:, :-1, ...]
 
             # make a cat tensor to speed up feature extraction
+            base_batch = x.shape[0]
             x = torch.cat((x, emask), dim=0)
             features = self.feature_network(x)
+
+            # make the appended feature dict to pass to our discriminator
+            features = {key: torch.cat(featraw.split(base_batch, dim=0), dim=1) for key, featraw in zip(features.keys(), features.values())}
+
             logits = self.discriminator(features, c)
 
             return logits
@@ -256,9 +259,6 @@ class ProjectedDiscriminator(torch.nn.Module):
 
             if self.interp224:
                 x = F.interpolate(x, 224, mode='bilinear', align_corners=False)
-
-            # if self.imnet_norm:
-            #     x = self.normalize(x)
 
             features = self.feature_network(x)
             logits = self.discriminator(features, c)

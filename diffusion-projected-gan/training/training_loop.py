@@ -294,7 +294,7 @@ def training_loop(
     # Setup training phases.
     if rank == 0:
         print('Setting up training phases...')
-    loss = dnnlib.util.construct_class_by_name(device=device, G=G, G_ema=G_ema, D=D, multi_disc=training_set_kwargs['multi_disc'], **loss_kwargs) # subclass of training.loss.Loss
+    loss = dnnlib.util.construct_class_by_name(device=device, G=G, G_ema=G_ema, D=D, rgba=training_set_kwargs['rgba'], multi_disc=training_set_kwargs['multi_disc'], **loss_kwargs) # subclass of training.loss.Loss
     phases = []
     for name, module, opt_kwargs, reg_interval in [('G', G, G_opt_kwargs, G_reg_interval), ('D', D, D_opt_kwargs, D_reg_interval)]:
         if reg_interval is None:
@@ -437,7 +437,7 @@ def training_loop(
         batch_idx += 1
 
         # Execute ADA heuristic.
-        if training_set_kwargs['multi_disc']:
+        if training_set_kwargs['multi_disc'] and training_set_kwargs['rgba']:
             if (ada_img_stats is not None) and (ada_mask_stats is not None) and (batch_idx % ada_interval == 0):
                 ada_img_stats.update()
                 ada_mask_stats.update()

@@ -21,13 +21,14 @@ class Loss:
 
 
 class ProjectedGANLoss(Loss):
-    def __init__(self, device, G, D, G_ema, multi_disc=False, blur_init_sigma=0, blur_fade_kimg=0, **kwargs):
+    def __init__(self, device, G, D, G_ema, rgba=False, multi_disc=False, blur_init_sigma=0, blur_fade_kimg=0, **kwargs):
         super().__init__()
         self.device = device
         self.G = G
         self.G_ema = G_ema
         self.D = D
-        self.multi_disc = multi_disc
+        self.rgba = rgba
+        self.multi_disc = multi_disc # fix
         self.blur_init_sigma = blur_init_sigma
         self.blur_fade_kimg = blur_fade_kimg
 
@@ -61,7 +62,7 @@ class ProjectedGANLoss(Loss):
             with torch.autograd.profiler.record_function('Gmain_forward'):
                 gen_img = self.run_G(gen_z, gen_c)
                 gen_logits = self.run_D(gen_img, gen_c, blur_sigma=blur_sigma)
-                if self.multi_disc:
+                if self.multi_disc and self.rgba:
                     # compute loss for masks and img separately, otherwise you will be averaging logits from different discs!
                     feat_dim = gen_logits.shape[1]//2
                     loss_Gmain_img = (-gen_logits[:, :feat_dim]).mean()
@@ -101,7 +102,7 @@ class ProjectedGANLoss(Loss):
                 gen_img = self.run_G(gen_z, gen_c, update_emas=True)
                 gen_logits = self.run_D(gen_img, gen_c, blur_sigma=blur_sigma)
 
-                if self.multi_disc:
+                if self.multi_disc and self.rgba:
                     # compute loss for masks and img separately, otherwise you will be averaging logits from different discs!
                     feat_dim = gen_logits.shape[1]//2
                     loss_Dgen_img = (F.relu(torch.ones_like(gen_logits[:, :feat_dim]) + gen_logits[:, :feat_dim])).mean()
@@ -134,7 +135,7 @@ class ProjectedGANLoss(Loss):
                 real_img_tmp = real_img.detach().requires_grad_(False)
                 real_logits = self.run_D(real_img_tmp, real_c, blur_sigma=blur_sigma)
 
-                if self.multi_disc:
+                if self.multi_disc and self.rgba:
                     # compute loss for masks and img separately, otherwise you will be averaging logits from different discs!
                     feat_dim = real_logits.shape[1]//2
                     loss_Dreal_img = (F.relu(torch.ones_like(real_logits[:, :feat_dim]) - real_logits[:, :feat_dim])).mean()

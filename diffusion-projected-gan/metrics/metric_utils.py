@@ -296,19 +296,6 @@ def compute_feature_stats_for_dataset(opts, detector_url, detector_kwargs, rel_l
                 raw_images = normalize(raw_images/255.)
                 raw_masks = normalize(raw_masks/255.)
 
-                # # scale the images to 0-255
-                # images = (raw_images - lo) * (255 / (hi - lo))
-                # masks = (raw_masks - lo) * (255 / (hi - lo))
-                #
-                # # round and clamp as needed
-                # raw_images = raw_images.round().clamp(0, 255).to(torch.uint8)
-                # raw_masks = raw_masks.round().clamp(0, 255).to(torch.uint8)
-
-            else:
-                # round and clamp as needed
-                raw_images.to(torch.uint8)
-                raw_masks.to(torch.uint8)
-
             with torch.no_grad():
                 img_features = detector(raw_images.to(opts.device), **detector_kwargs)
                 mask_features = detector(raw_masks.to(opts.device), **detector_kwargs)
@@ -339,9 +326,6 @@ def compute_feature_stats_for_dataset(opts, detector_url, detector_kwargs, rel_l
 
             if opts.imnet_norm: # try this
                 images = normalize(images/255.)
-            else:
-                # round and clamp as needed
-                images = images.round().clamp(0, 255).to(torch.uint8)
 
             with torch.no_grad():
                 features = detector(images.to(opts.device), **detector_kwargs)
@@ -428,14 +412,8 @@ def compute_feature_stats_for_generator(opts, detector_url, detector_kwargs, rel
                     images_out = normalize(images_out/255.)
                     masks_out = normalize(masks_out/255.)
 
-                    # append them as needed
-                    images_full.append(images_out)
-                    masks_full.append(masks_out)
-
-                else:
-                    # append them as needed
-                    images_full.append(images_out)
-                    masks_full.append(masks_out)
+                images_full.append(images_out)
+                masks_full.append(masks_out)
 
             # get the input tensors
             images = torch.cat(images_full)
