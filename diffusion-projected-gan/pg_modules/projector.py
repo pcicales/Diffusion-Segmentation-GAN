@@ -113,6 +113,7 @@ class F_RandomProj(nn.Module):
         rgba=False,
         rgba_mode='',
         multi_disc=False,
+        disc_noise='gauss',
         imnet_norm=False,
         **kwargs,
     ):
@@ -128,7 +129,7 @@ class F_RandomProj(nn.Module):
         self.d_pos = d_pos
         self.noise_sd = noise_sd
         # self.diffusion = AugmentPipe(t_max=1000)
-        self.diffusion = Diffusion(t_min=5, t_max=500, beta_start=1e-4, beta_end=1e-2)
+        self.diffusion = Diffusion(t_min=5, t_max=500, beta_start=1e-4, beta_end=1e-2, disc_noise=disc_noise)
         # build pretrained feature network and random decoder (scratch)
         self.pretrained, self.scratch = _make_projector(im_res=im_res, cout=self.cout, proj_type=self.proj_type,
                                                         expand=self.expand, rgba=rgba, rgba_mode=rgba_mode,

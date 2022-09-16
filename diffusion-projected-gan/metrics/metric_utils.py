@@ -206,10 +206,6 @@ def compute_feature_stats_for_dataset(opts, detector_url, detector_kwargs, rel_l
     if data_loader_kwargs is None:
         data_loader_kwargs = dict(pin_memory=True, num_workers=3, prefetch_factor=2)
 
-    if opts.imnet_norm:
-        normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
-                                             std=[0.229, 0.224, 0.225])
-
     # Try to lookup from cache.
     cache_file = None
     cache_seg_file = None
@@ -292,10 +288,6 @@ def compute_feature_stats_for_dataset(opts, detector_url, detector_kwargs, rel_l
             raw_images[:] = images[:, :-1, :, :][:]
             raw_masks[:] = images[:, -1:, :, :].repeat([1, 3, 1, 1])[:]
 
-            if opts.imnet_norm: # try this
-                raw_images = normalize(raw_images/255.)
-                raw_masks = normalize(raw_masks/255.)
-
             with torch.no_grad():
                 img_features = detector(raw_images.to(opts.device), **detector_kwargs)
                 mask_features = detector(raw_masks.to(opts.device), **detector_kwargs)
@@ -324,9 +316,6 @@ def compute_feature_stats_for_dataset(opts, detector_url, detector_kwargs, rel_l
             if images.shape[1] == 1: # assumes single channel to rgb, adjust this all later
                 images = images.repeat([1, 3, 1, 1])
 
-            if opts.imnet_norm: # try this
-                images = normalize(images/255.)
-
             with torch.no_grad():
                 features = detector(images.to(opts.device), **detector_kwargs)
 
@@ -351,10 +340,6 @@ def compute_feature_stats_for_generator(opts, detector_url, detector_kwargs, rel
     # Setup generator and labels.
     G = copy.deepcopy(opts.G).eval().requires_grad_(False).to(opts.device)
     c_iter = iterate_random_labels(opts=opts, batch_size=batch_gen)
-
-    if opts.imnet_norm:
-        normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
-                                             std=[0.229, 0.224, 0.225])
 
     # Initialize.
     # we want to generate stats for both images and masks if we are in seg mode
@@ -407,11 +392,6 @@ def compute_feature_stats_for_generator(opts, detector_url, detector_kwargs, rel
                 images_out = images_out.round().clamp(0, 255).to(torch.uint8)
                 masks_out = masks_out.round().clamp(0, 255).to(torch.uint8)
 
-                # normalize
-                if opts.imnet_norm:  # try this
-                    images_out = normalize(images_out/255.)
-                    masks_out = normalize(masks_out/255.)
-
                 images_full.append(images_out)
                 masks_full.append(masks_out)
 
@@ -452,12 +432,7 @@ def compute_feature_stats_for_generator(opts, detector_url, detector_kwargs, rel
                 # round and clamp as needed
                 img = img.round().clamp(0, 255).to(torch.uint8)
 
-                if opts.imnet_norm:  # try this
-                    img = normalize(img/255.)
-                    images.append(img)
-
-                else:
-                    images.append(img)
+                images.append(img)
 
             # get the input tensor
             images = torch.cat(images)

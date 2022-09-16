@@ -174,6 +174,7 @@ class Generator(nn.Module):
         rgba_mode='',
         multi_disc=False,
         imnet_norm=False,
+        disc_noise='gauss',
         ngf=128,
         cond=0,
         mapping_kwargs={},
@@ -184,6 +185,7 @@ class Generator(nn.Module):
         self.rgba_mode = rgba_mode
         self.multi_disc = multi_disc
         self.imnet_norm = imnet_norm
+        self.disc_noise = disc_noise
         self.z_dim = z_dim
         self.c_dim = c_dim
         self.w_dim = w_dim

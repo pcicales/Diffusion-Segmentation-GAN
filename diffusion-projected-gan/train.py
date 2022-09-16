@@ -103,11 +103,11 @@ def launch_training(c, desc, outdir, dry_run):
             torch.multiprocessing.spawn(fn=subprocess_fn, args=(c, temp_dir), nprocs=c.num_gpus)
 
 
-def init_dataset_kwargs(data, rgba=False, rgba_mode='mean_extract', rgba_mult=1, multi_disc=False, imnet_norm=False):
+def init_dataset_kwargs(data, rgba=False, rgba_mode='mean_extract', rgba_mult=1, multi_disc=False, imnet_norm=False, disc_noise='gauss'):
     try:
         dataset_kwargs = dnnlib.EasyDict(class_name='training.dataset.ImageFolderDataset', path=data, use_labels=True,
                                          max_size=None, xflip=False, rgba=rgba, rgba_mode=rgba_mode, rgba_mult=rgba_mult,
-                                         multi_disc=multi_disc, imnet_norm=imnet_norm)
+                                         multi_disc=multi_disc, imnet_norm=imnet_norm, disc_noise=disc_noise)
         dataset_obj = dnnlib.util.construct_class_by_name(**dataset_kwargs) # Subclass of training.dataset.Dataset.
         dataset_kwargs.resolution = dataset_obj.resolution # Be explicit about resolution.
         dataset_kwargs.use_labels = dataset_obj.has_labels # Be explicit about labels.
@@ -139,6 +139,7 @@ def parse_comma_separated_list(s):
 @click.option('--d_pos',        help='Diffusion adding position', metavar='STR',                type=str,   default='first')
 @click.option('--noise_sd',     help='Diffusion noise standard deviation', metavar='FLOAT',     type=float, default=0.5)
 @click.option('--ada_kimg',     help='# kimgs needed to push diffusion to maximum level',       type=int,   default=100)
+@click.option('--disc_noise',   help='Diffusion noise to use during training.',                 type=str,   default='poisson')
 
 # Segmentation config
 @click.option('--rgba',       help='Whether or not we are generating with mask', metavar='BOOL', type=bool, default=True)
@@ -147,7 +148,7 @@ def parse_comma_separated_list(s):
 @click.option('--multi_disc',  help='One 2x deep disc for 3 channel projector on rgb and a*3 (False) or two 1x deep discs for one 3 channel projector on rgb and a*3 (True)', metavar='BOOL', type=bool, default=False)
 
 # Projection config
-@click.option('--imnet_norm',  help='Use imagenet normalization when computing stats', metavar='BOOL', type=bool, default=False)
+@click.option('--imnet_norm',  help='Use imagenet normalization when computing loss on projected disc', metavar='BOOL', type=bool, default=True)
 
 # Optional features.
 @click.option('--cond',         help='Train conditional model', metavar='BOOL',                 type=bool, default=False, show_default=True)
@@ -189,7 +190,8 @@ def main(**kwargs):
     # Training set.
     c.training_set_kwargs, dataset_name = init_dataset_kwargs(data=opts.data, rgba=opts.rgba,
                                                               rgba_mode=opts.rgba_mode, rgba_mult=opts.rgba_mult,
-                                                              multi_disc=opts.multi_disc, imnet_norm=opts.imnet_norm)
+                                                              multi_disc=opts.multi_disc, imnet_norm=opts.imnet_norm,
+                                                              disc_noise=opts.disc_noise)
     if opts.cond and not c.training_set_kwargs.use_labels:
         raise click.ClickException('--cond=True requires labels specified in dataset.json')
     c.training_set_kwargs.use_labels = opts.cond

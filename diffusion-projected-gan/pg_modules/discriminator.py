@@ -168,7 +168,14 @@ class ProjectedDiscriminator(torch.nn.Module):
         self.imnet_norm = imnet_norm
         self.interp224 = interp224
 
-        self.feature_network = F_RandomProj(rgba=rgba, rgba_mode=rgba_mode, multi_disc=multi_disc, **backbone_kwargs)
+        if self.imnet_norm:
+            self.normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
+                                             std=[0.229, 0.224, 0.225])
+        else:
+            self.normalize = transforms.Normalize(mean=[0.5, 0.5, 0.5],
+                                             std=[0.5, 0.5, 0.5])
+
+        self.feature_network = F_RandomProj(rgba=rgba, rgba_mode=rgba_mode, multi_disc=multi_disc, disc_noise=kwargs['disc_noise'], **backbone_kwargs)
         if self.rgba and self.multi_disc:
             self.discriminator = MultiScaleD(
                 channels=self.feature_network.CHANNELS,
@@ -218,6 +225,10 @@ class ProjectedDiscriminator(torch.nn.Module):
                 x = F.interpolate(x, 224, mode='bilinear', align_corners=False)
                 emask = F.interpolate(emask, 224, mode='bilinear', align_corners=False) # fix
 
+            # normalize after augmentation
+            x = self.normalize(x)
+            emask = self.normalize(emask)
+
             # make a cat tensor to speed up feature extraction
             x = torch.cat((x, emask), dim=0)
             features = self.feature_network(x)
@@ -241,6 +252,10 @@ class ProjectedDiscriminator(torch.nn.Module):
             emask = x[:, -1:, ...].repeat([1, 3, 1, 1]) #.expand(x.shape[0], 3, x.shape[2], x.shape[3])
             x = x[:, :-1, ...]
 
+            # normalize after augmentation
+            x = self.normalize(x)
+            emask = self.normalize(emask)
+
             # make a cat tensor to speed up feature extraction
             base_batch = x.shape[0]
             x = torch.cat((x, emask), dim=0)
@@ -259,6 +274,9 @@ class ProjectedDiscriminator(torch.nn.Module):
 
             if self.interp224:
                 x = F.interpolate(x, 224, mode='bilinear', align_corners=False)
+
+            # normalize after augmentation
+            x = self.normalize(x)
 
             features = self.feature_network(x)
             logits = self.discriminator(features, c)

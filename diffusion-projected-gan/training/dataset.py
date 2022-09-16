@@ -36,7 +36,8 @@ class Dataset(torch.utils.data.Dataset):
         rgba_mode = '',
         rgba_mult = 1,
         multi_disc = False,
-        imnet_norm = False
+        imnet_norm = False,
+        disc_noise = 'gauss'
     ):
         self._name = name
         self._raw_shape = list(raw_shape)
@@ -48,6 +49,7 @@ class Dataset(torch.utils.data.Dataset):
         self._rgba_mult = rgba_mult
         self._multi_disc = multi_disc
         self._imnet_norm = imnet_norm
+        self._disc_noise = disc_noise
 
         # Apply max_size.
         self._raw_idx = np.arange(self._raw_shape[0], dtype=np.int64)
@@ -190,6 +192,7 @@ class ImageFolderDataset(Dataset):
         self._rgba_mult = super_kwargs['rgba_mult']
         self._multi_disc = super_kwargs['multi_disc']
         self._imnet_norm = super_kwargs['imnet_norm']
+        self._disc_noise = super_kwargs['disc_noise']
 
         if os.path.isdir(self._path):
             self._type = 'dir'

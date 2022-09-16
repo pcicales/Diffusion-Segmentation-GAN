@@ -237,7 +237,7 @@ def training_loop(
     common_kwargs = dict(c_dim=training_set.label_dim, img_resolution=training_set.resolution,
                          img_channels=training_set.num_channels, rgba=training_set_kwargs['rgba'],
                          rgba_mode=training_set_kwargs['rgba_mode'], multi_disc=training_set_kwargs['multi_disc'],
-                         imnet_norm=training_set_kwargs['imnet_norm'])
+                         imnet_norm=training_set_kwargs['imnet_norm'], disc_noise=training_set_kwargs['disc_noise'])
     G = dnnlib.util.construct_class_by_name(**G_kwargs, **common_kwargs).train().requires_grad_(False).to(device) # subclass of torch.nn.Module
     D = dnnlib.util.construct_class_by_name(**D_kwargs, **common_kwargs).train().requires_grad_(False).to(device) # subclass of torch.nn.Module
     G_ema = copy.deepcopy(G).eval()

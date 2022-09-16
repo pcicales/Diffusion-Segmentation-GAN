@@ -14,6 +14,8 @@ from torch_utils import misc
 from torch_utils.ops import upfirdn2d
 from torch_utils.ops import grid_sample_gradfix
 from torch_utils.ops import conv2d_gradfix
+import matplotlib.pyplot as plt
+from random import *
 
 #----------------------------------------------------------------------------
 # Helpers for doing diffusion process.
@@ -60,12 +62,37 @@ def get_beta_schedule(beta_schedule, beta_start, beta_end, num_diffusion_timeste
     return betas
 
 
-def q_sample(x_0, alphas_bar_sqrt, one_minus_alphas_bar_sqrt, t, noise_type='gauss', noise_std=1.0):
+def q_sample(x_0, alphas_bar_sqrt, one_minus_alphas_bar_sqrt, t, noise_type='gauss', noise_std=1.0, p_poisson=0):
     batch_size, num_channels, _, _ = x_0.shape
     if noise_type == 'gauss':
         noise = torch.randn_like(x_0, device=x_0.device) * noise_std
     elif noise_type == 'bernoulli':
         noise = (torch.bernoulli(torch.ones_like(x_0) * 0.5) * 2 - 1.) * noise_std
+    elif noise_type == 'poisson':
+        # we use noise std to set the range of the poisson values
+        noise_gauss = torch.randn_like(x_0, device=x_0.device) * noise_std
+        flat_noise_gauss = noise_gauss.view(noise_gauss.size(0), -1)
+        min_range, max_range = flat_noise_gauss.min(1, keepdim=True)[0], \
+                               flat_noise_gauss.max(1, keepdim=True)[0]
+
+        # generate the noise, mean is determined by our adjusting p value
+        init_sample = torch.normal(randint(0, 100), 10, x_0.shape, device=x_0.device)
+        noise = torch.poisson(init_sample)
+
+        # flip the sign of the noise randomly
+        if random() <= 0.5:
+            noise *= -1
+
+        # scale the noise to the desired std generated values
+        flat_noise = noise.view(noise.size(0), -1)
+        noise_min, noise_max = flat_noise.min(1, keepdim=True)[0], \
+                               flat_noise.max(1, keepdim=True)[0]
+        noise = ((max_range - min_range) * (
+                    (flat_noise - noise_min) / (noise_max - noise_min)) + min_range).view(x_0.shape)
+        # plt.imshow(noise[0][0].cpu())
+        # plt.imshow(noise_gauss[0][0].cpu())
+        # plt.hist(np.array(noise[0][0].cpu()), bins='auto')
+        # plt.hist(np.array(noise_gauss[0][0].cpu()), bins='auto')
     else:
         raise NotImplementedError(noise_type)
     alphas_t_sqrt = alphas_bar_sqrt[t].view(batch_size, num_channels, 1, 1)
@@ -78,11 +105,11 @@ def q_sample(x_0, alphas_bar_sqrt, one_minus_alphas_bar_sqrt, t, noise_type='gau
 class Diffusion(torch.nn.Module):
     def __init__(self,
         beta_schedule='linear', beta_start=1e-4, beta_end=1e-2,
-        t_min=5, t_max=500, noise_std=0.5,
+        t_min=5, t_max=500, noise_std=0.5, disc_noise='gauss'
     ):
         super().__init__()
         self.p = 0.0       # Overall multiplier for augmentation probability.
-        self.noise_type = self.base_noise_type = 'gauss'
+        self.noise_type = self.base_noise_type = disc_noise
         self.base_schedule = beta_schedule
         self.beta_start = beta_start
         self.beta_end = beta_end
@@ -135,7 +162,7 @@ class Diffusion(torch.nn.Module):
 
         x_t = q_sample(x_0, alphas_bar_sqrt, one_minus_alphas_bar_sqrt, t,
                        noise_type=self.noise_type,
-                       noise_std=noise_std)
+                       noise_std=noise_std, p_poisson=self.p)
         return x_t
 
 #----------------------------------------------------------------------------
