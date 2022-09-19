@@ -131,7 +131,7 @@ def generate_images(
         G = legacy.load_network_pkl(f)['G_ema'].to(device) # type: ignore
 
     os.makedirs(outdir, exist_ok=True)
-    if discard_outdir != None:
+    if len(discard_outdir) != 0:
         os.makedirs(discard_outdir, exist_ok=True)
 
     # Labels.
