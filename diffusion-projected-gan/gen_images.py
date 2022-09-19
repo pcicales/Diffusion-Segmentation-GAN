@@ -91,7 +91,7 @@ def make_transform(translate: Tuple[float,float], angle: float):
 @click.option('--mask_cutoff',  help='Pixel filtering to remove noisy contours', metavar='INT', type=int, default=200)
 @click.option('--mask_filter',  help='Percent of image that must be a mask to keep the sample', metavar='FLOAT', type=float, default=0.2)
 @click.option('--discard_outdir', help='Where to save the discarded output images, set to None if you wish to discard them', type=str, default='/data/public/HULA/GEN_GLOM_RGBA_DISCARD', metavar='DIR')
-
+@click.option('--filt_mode',       help='Whether or not we are using cv2 filtering', metavar='BOOL', type=bool, default=False)
 
 def generate_images(
     network_pkl: str,
@@ -105,6 +105,7 @@ def generate_images(
     rgba: Optional[bool],
     rgba_mode: str,
     rgba_mult: Optional[int],
+    filt_mode: Optional[bool],
     mask_cutoff: Optional[int],
     mask_filter: Optional[float],
     discard_outdir: str,
@@ -113,7 +114,7 @@ def generate_images(
 
     Examples:
 
-    \b
+    \b--
     # Generate an image using pre-trained AFHQv2 model ("Ours" in Figure 1, left).
     python gen_images.py --outdir=out --trunc=1 --seeds=2 \\
         --network=https://api.ngc.nvidia.com/v2/models/nvidia/research/stylegan3/versions/1/files/stylegan3-r-afhqv2-512x512.pkl
@@ -188,40 +189,41 @@ def generate_images(
                 # Convert the image
                 img = np.rint(img.permute(1, 2, 0).numpy()).astype('uint8')
 
-                # we now need to clean the mask as needed
-                # 1) morphological transformation (eliminate small islands)
-                se1 = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
-                se2 = cv2.getStructuringElement(cv2.MORPH_RECT, (2, 2))
-                mask = cv2.morphologyEx(img[:, :, -1], cv2.MORPH_CLOSE, se1)
-                mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, se2)
-                img[..., -1] = mask
+                if filt_mode:
+                    # we now need to clean the mask as needed
+                    # 1) morphological transformation (eliminate small islands)
+                    se1 = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
+                    se2 = cv2.getStructuringElement(cv2.MORPH_RECT, (2, 2))
+                    mask = cv2.morphologyEx(img[:, :, -1], cv2.MORPH_CLOSE, se1)
+                    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, se2)
+                    img[..., -1] = mask
 
-                # 2) flood fill (fill in any holes)
-                # Copy the thresholded image.
-                im_floodfill = img[..., -1].copy()
+                    # 2) flood fill (fill in any holes)
+                    # Copy the thresholded image.
+                    im_floodfill = img[..., -1].copy()
 
-                # Mask used to flood filling.
-                # Notice the size needs to be 2 pixels than the image.
-                h, w = img[..., -1].shape[:2]
-                mask = np.zeros((h + 2, w + 2), np.uint8)
+                    # Mask used to flood filling.
+                    # Notice the size needs to be 2 pixels than the image.
+                    h, w = img[..., -1].shape[:2]
+                    mask = np.zeros((h + 2, w + 2), np.uint8)
 
-                # Floodfill from point (0, 0)
-                cv2.floodFill(im_floodfill, mask, (0, 0), 255)
+                    # Floodfill from point (0, 0)
+                    cv2.floodFill(im_floodfill, mask, (0, 0), 255)
 
-                # Invert floodfilled image
-                im_floodfill_inv = cv2.bitwise_not(im_floodfill)
+                    # Invert floodfilled image
+                    im_floodfill_inv = cv2.bitwise_not(im_floodfill)
 
-                # Combine the two images to get the foreground.
-                img[..., -1] = img[..., -1] | im_floodfill_inv
+                    # Combine the two images to get the foreground.
+                    img[..., -1] = img[..., -1] | im_floodfill_inv
 
-                # 3) size filtering (remove any contours that are too small)
-                contours, _ = cv2.findContours(img[..., -1], cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
-                mask = np.zeros_like(img[..., -1])
-                for contour in contours:
-                    area = cv2.contourArea(contour)
-                    if area > mask_cutoff:
-                        cv2.fillPoly(mask, [contour], 255)
-                img[..., -1][:] = mask[:]
+                    # 3) size filtering (remove any contours that are too small)
+                    contours, _ = cv2.findContours(img[..., -1], cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+                    mask = np.zeros_like(img[..., -1])
+                    for contour in contours:
+                        area = cv2.contourArea(contour)
+                        if area > mask_cutoff:
+                            cv2.fillPoly(mask, [contour], 255)
+                    img[..., -1][:] = mask[:]
 
                 # 4) filter by mask size (remove images that dont have an acceptably large mask)
                 mask_area = ((np.sum(img[..., -1]) / 255) / (img.shape[0] * img.shape[1]))

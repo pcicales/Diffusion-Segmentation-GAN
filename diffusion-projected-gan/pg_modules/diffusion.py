@@ -79,6 +79,9 @@ def q_sample(x_0, alphas_bar_sqrt, one_minus_alphas_bar_sqrt, t, noise_type='gau
         init_sample = torch.normal(randint(0, 100), 10, x_0.shape, device=x_0.device)
         noise = torch.poisson(init_sample)
 
+        # jiggle the noise with the initial gaussian
+        noise += (noise_gauss * noise_std)
+
         # flip the sign of the noise randomly
         if random() <= 0.5:
             noise *= -1

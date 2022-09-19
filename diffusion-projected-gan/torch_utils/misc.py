@@ -193,7 +193,7 @@ def check_ddp_consistency(module, ignore_regex=None):
 #----------------------------------------------------------------------------
 # Print summary table of module hierarchy.
 
-def print_module_summary(module, inputs, max_nesting=3, skip_redundant=True):
+def print_module_summary(module, inputs, max_nesting=3, skip_redundant=True, real_in=False):
     assert isinstance(module, torch.nn.Module)
     assert not isinstance(module, torch.jit.ScriptModule)
     assert isinstance(inputs, (tuple, list))
@@ -213,7 +213,7 @@ def print_module_summary(module, inputs, max_nesting=3, skip_redundant=True):
     hooks += [mod.register_forward_hook(post_hook) for mod in module.modules()]
 
     # Run module.
-    outputs = module(*inputs)
+    outputs = module(*inputs, real_in=real_in)
     for hook in hooks:
         hook.remove()
 

@@ -175,6 +175,7 @@ class Generator(nn.Module):
         multi_disc=False,
         imnet_norm=False,
         disc_noise='gauss',
+        channel_inc=0,
         ngf=128,
         cond=0,
         mapping_kwargs={},
@@ -186,6 +187,7 @@ class Generator(nn.Module):
         self.multi_disc = multi_disc
         self.imnet_norm = imnet_norm
         self.disc_noise = disc_noise
+        self.channel_inc = channel_inc
         self.z_dim = z_dim
         self.c_dim = c_dim
         self.w_dim = w_dim
@@ -197,7 +199,7 @@ class Generator(nn.Module):
         Synthesis = FastganSynthesisCond if cond else FastganSynthesis
         self.synthesis = Synthesis(ngf=ngf, z_dim=z_dim, nc=img_channels, img_resolution=img_resolution, rgba=rgba, rgba_mode=rgba_mode, multi_disc=multi_disc, **synthesis_kwargs)
 
-    def forward(self, z, c, **kwargs):
+    def forward(self, z, c, real_in=False, **kwargs):
         w = self.mapping(z, c)
         img = self.synthesis(w, c)
         return img

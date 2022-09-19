@@ -9,6 +9,8 @@ from pg_modules.blocks import DownBlock, DownBlockPatch, conv2d
 from pg_modules.projector import F_RandomProj
 from pg_modules.diffaug import DiffAugment
 
+import random
+
 
 class SingleDisc(nn.Module):
     def __init__(self, nc=None, ndf=None, start_sz=256, end_sz=8, head=None, separable=False, patch=False):
@@ -157,6 +159,7 @@ class ProjectedDiscriminator(torch.nn.Module):
         rgba_mode='',
         multi_disc=False,
         imnet_norm=False,
+        channel_inc = 0,
         backbone_kwargs={},
         **kwargs
     ):
@@ -166,14 +169,24 @@ class ProjectedDiscriminator(torch.nn.Module):
         self.rgba_mode = rgba_mode
         self.multi_disc = multi_disc
         self.imnet_norm = imnet_norm
+        self.channel_inc = channel_inc
         self.interp224 = interp224
 
+        # normalization implementation
         if self.imnet_norm:
             self.normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
                                              std=[0.229, 0.224, 0.225])
         else:
             self.normalize = transforms.Normalize(mean=[0.5, 0.5, 0.5],
                                              std=[0.5, 0.5, 0.5])
+
+        # progressive channel addition
+        if self.channel_inc > 0:
+            self.current_mode = 1
+            if self.rgba:
+                self.repeat_chan = 4
+            else:
+                self.repeat_chan = 3
 
         self.feature_network = F_RandomProj(rgba=rgba, rgba_mode=rgba_mode, multi_disc=multi_disc, disc_noise=kwargs['disc_noise'], **backbone_kwargs)
         if self.rgba and self.multi_disc:
@@ -210,11 +223,29 @@ class ProjectedDiscriminator(torch.nn.Module):
     def eval(self):
         return self.train(False)
 
-    def forward(self, x, c):
+    def forward(self, x, c, real_in=False):
+
+        # progressive channel addition
+        if self.channel_inc > 0:
+            if ((self.current_mode < 3) and not self.rgba) or ((self.current_mode < 4) and self.rgba):
+                temp_x = torch.empty_like(x)
+                if real_in:
+                    temp_x[:] = x[:, self.current_mode-1, :, :].unsqueeze(1).expand(x.shape)[:]
+                else:
+                    temp_x[:] = x[:, random.randint(self.current_mode-1, self.repeat_chan-1), :, :].unsqueeze(1).expand(x.shape)[:]
+                # R is already done initially
+                # RG
+                if self.current_mode == 2:
+                    temp_x[:, 0, ...][:] = x[:, 0, ...][:]
+                # RGB (only for RGBA, else its just the input)
+                elif self.current_mode == 3:
+                    temp_x[:, 0:2, ...][:] = x[:, 0:2, ...][:]
+                # RGBA is the initial input
+                x = temp_x
 
         # if we are using multi disc, we need to get the outputs for both discriminators
         if self.rgba and self.multi_disc:
-            emask = x[:, -1:, ...].repeat([1, 3, 1, 1]) #.expand(x.shape[0], 3, x.shape[2], x.shape[3])
+            emask = x[:, -1:, ...].expand(x.shape[0], 3, x.shape[2], x.shape[3])
             x = x[:, :-1, ...]
             base_batch = x.shape[0]
             if self.diffaug:
@@ -249,7 +280,7 @@ class ProjectedDiscriminator(torch.nn.Module):
             if self.interp224:
                 x = F.interpolate(x, 224, mode='bilinear', align_corners=False)
 
-            emask = x[:, -1:, ...].repeat([1, 3, 1, 1]) #.expand(x.shape[0], 3, x.shape[2], x.shape[3])
+            emask = x[:, -1:, ...].expand(x.shape[0], 3, x.shape[2], x.shape[3])
             x = x[:, :-1, ...]
 
             # normalize after augmentation

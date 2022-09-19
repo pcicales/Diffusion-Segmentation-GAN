@@ -237,7 +237,8 @@ def training_loop(
     common_kwargs = dict(c_dim=training_set.label_dim, img_resolution=training_set.resolution,
                          img_channels=training_set.num_channels, rgba=training_set_kwargs['rgba'],
                          rgba_mode=training_set_kwargs['rgba_mode'], multi_disc=training_set_kwargs['multi_disc'],
-                         imnet_norm=training_set_kwargs['imnet_norm'], disc_noise=training_set_kwargs['disc_noise'])
+                         imnet_norm=training_set_kwargs['imnet_norm'], disc_noise=training_set_kwargs['disc_noise'],
+                         channel_inc=training_set_kwargs['channel_inc'])
     G = dnnlib.util.construct_class_by_name(**G_kwargs, **common_kwargs).train().requires_grad_(False).to(device) # subclass of torch.nn.Module
     D = dnnlib.util.construct_class_by_name(**D_kwargs, **common_kwargs).train().requires_grad_(False).to(device) # subclass of torch.nn.Module
     G_ema = copy.deepcopy(G).eval()
@@ -270,8 +271,8 @@ def training_loop(
     if rank == 0:
         z = torch.empty([batch_gpu, G.z_dim], device=device)
         c = torch.empty([batch_gpu, G.c_dim], device=device)
-        img = misc.print_module_summary(G, [z, c])
-        misc.print_module_summary(D, [img, c])
+        img = misc.print_module_summary(G, [z, c], real_in=False)
+        misc.print_module_summary(D, [img, c], real_in=False)
 
     # Setup augmentation.
     if rank == 0:
@@ -476,6 +477,19 @@ def training_loop(
         training_stats.report0('Timing/total_days', (tick_end_time - start_time) / (24 * 60 * 60))
         if rank == 0:
             print(' '.join(fields))
+
+        # execute progressive channel addition
+        if training_set_kwargs['channel_inc'] > 0:
+            if cur_tick == 0:
+                print('Progressive channel learning initiated, learning R...')
+            if (cur_tick != 0) and ((cur_tick // training_set_kwargs['channel_inc']) == 0):
+                if D.current_mode == 1:
+                    print('NOW TRAINING WITH RG...')
+                elif D.current_mode == 2:
+                    print('NOW TRAINING WITH RGB...')
+                elif (D.current_mode == 3) and training_set_kwargs['rgba']:
+                    print('NOW TRAINING WITH RGBA...')
+                D.current_mode = D.current_mode + 1
 
         # Check for abort.
         if (not done) and (abort_fn is not None) and abort_fn():

@@ -103,11 +103,11 @@ def launch_training(c, desc, outdir, dry_run):
             torch.multiprocessing.spawn(fn=subprocess_fn, args=(c, temp_dir), nprocs=c.num_gpus)
 
 
-def init_dataset_kwargs(data, rgba=False, rgba_mode='mean_extract', rgba_mult=1, multi_disc=False, imnet_norm=False, disc_noise='gauss'):
+def init_dataset_kwargs(data, rgba=False, rgba_mode='mean_extract', rgba_mult=1, multi_disc=False, imnet_norm=False, disc_noise='gauss', channel_inc=0):
     try:
         dataset_kwargs = dnnlib.EasyDict(class_name='training.dataset.ImageFolderDataset', path=data, use_labels=True,
                                          max_size=None, xflip=False, rgba=rgba, rgba_mode=rgba_mode, rgba_mult=rgba_mult,
-                                         multi_disc=multi_disc, imnet_norm=imnet_norm, disc_noise=disc_noise)
+                                         multi_disc=multi_disc, imnet_norm=imnet_norm, disc_noise=disc_noise, channel_inc=channel_inc)
         dataset_obj = dnnlib.util.construct_class_by_name(**dataset_kwargs) # Subclass of training.dataset.Dataset.
         dataset_kwargs.resolution = dataset_obj.resolution # Be explicit about resolution.
         dataset_kwargs.use_labels = dataset_obj.has_labels # Be explicit about labels.
@@ -155,6 +155,9 @@ def parse_comma_separated_list(s):
 @click.option('--mirror',       help='Enable dataset x-flips', metavar='BOOL',                  type=bool, default=True,  show_default=True)
 @click.option('--resume',       help='Resume from given network pickle', metavar='[PATH|URL]',  type=str)
 
+# Progressive learning config
+@click.option('--channel_inc',  help='Increment to learn new channels in ticks, set to 0 to disable', metavar='INT', type=int, default=2)
+
 # Misc hyperparameters.
 @click.option('--batch-gpu',    help='Limit batch size per GPU', metavar='INT',                 type=click.IntRange(min=1), default=16)
 @click.option('--cbase',        help='Capacity multiplier', metavar='INT',                      type=click.IntRange(min=1), default=32768, show_default=True)
@@ -191,7 +194,7 @@ def main(**kwargs):
     c.training_set_kwargs, dataset_name = init_dataset_kwargs(data=opts.data, rgba=opts.rgba,
                                                               rgba_mode=opts.rgba_mode, rgba_mult=opts.rgba_mult,
                                                               multi_disc=opts.multi_disc, imnet_norm=opts.imnet_norm,
-                                                              disc_noise=opts.disc_noise)
+                                                              disc_noise=opts.disc_noise, channel_inc=opts.channel_inc)
     if opts.cond and not c.training_set_kwargs.use_labels:
         raise click.ClickException('--cond=True requires labels specified in dataset.json')
     c.training_set_kwargs.use_labels = opts.cond
