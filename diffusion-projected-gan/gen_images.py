@@ -90,7 +90,7 @@ def make_transform(translate: Tuple[float,float], angle: float):
 @click.option('--rgba_mult',  help='What multiplier to use on binary mask', metavar='INT', type=int, default=3)
 @click.option('--mask_cutoff',  help='Pixel filtering to remove noisy contours', metavar='INT', type=int, default=200)
 @click.option('--mask_filter',  help='Percent of image that must be a mask to keep the sample', metavar='FLOAT', type=float, default=0.2)
-@click.option('--discard_outdir', help='Where to save the discarded output images, set to None if you wish to discard them', type=str, default='/data/public/HULA/GEN_GLOM_RGBA_DISCARD', metavar='DIR')
+@click.option('--discard_outdir', help='Where to save the discarded output images, set to empty string if you wish to discard them', type=str, default='', metavar='DIR')
 @click.option('--filt_mode',       help='Whether or not we are using cv2 filtering', metavar='BOOL', type=bool, default=False)
 
 def generate_images(
@@ -229,7 +229,7 @@ def generate_images(
                 mask_area = ((np.sum(img[..., -1]) / 255) / (img.shape[0] * img.shape[1]))
                 if mask_area < mask_filter:
                     print('Small mask detected for seed{0}, mask occupied {1:.02%}% of the image.'.format(seed, mask_area))
-                    if discard_outdir != None:
+                    if len(discard_outdir) != 0:
                         PIL.Image.fromarray(img, 'RGBA').save(f'{discard_outdir}/seed{seed:04d}.png')
                     continue
 
