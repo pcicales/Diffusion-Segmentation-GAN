@@ -478,17 +478,21 @@ def training_loop(
         if rank == 0:
             print(' '.join(fields))
 
-        # execute progressive channel addition
+        # execute progressive channel addition, learn the task incrementally by channel
         if training_set_kwargs['channel_inc'] > 0:
             if cur_tick == 0:
-                print('Progressive channel learning initiated, learning R...')
-            if (cur_tick != 0) and ((cur_tick // training_set_kwargs['channel_inc']) == 0):
+                channel_inc_str = f"Progressive channel learning initiated, learning R, current tick {training_stats.report0('Progress/tick', cur_tick)}..."
+                print(channel_inc_str)
+            if (cur_tick != 0) and ((cur_tick % training_set_kwargs['channel_inc']) == 0):
                 if D.current_mode == 1:
-                    print('NOW TRAINING WITH RG...')
+                    channel_inc_str = f"Progressive channel learning progressing to next stage, learning RG, current tick {training_stats.report0('Progress/tick', cur_tick)}..."
+                    print(channel_inc_str)
                 elif D.current_mode == 2:
-                    print('NOW TRAINING WITH RGB...')
+                    channel_inc_str = f"Progressive channel learning progressing to next stage, learning RGB, current tick {training_stats.report0('Progress/tick', cur_tick)}..."
+                    print(channel_inc_str)
                 elif (D.current_mode == 3) and training_set_kwargs['rgba']:
-                    print('NOW TRAINING WITH RGBA...')
+                    channel_inc_str = f"Progressive channel learning progressing to next stage, learning RGBA, current tick {training_stats.report0('Progress/tick', cur_tick)}..."
+                    print(channel_inc_str)
                 D.current_mode = D.current_mode + 1
 
         # Check for abort.

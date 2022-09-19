@@ -223,7 +223,7 @@ class ProjectedDiscriminator(torch.nn.Module):
     def eval(self):
         return self.train(False)
 
-    def forward(self, x, c, real_in=False):
+    def forward(self, x, c, real_in):
 
         # progressive channel addition
         if self.channel_inc > 0:
@@ -232,7 +232,8 @@ class ProjectedDiscriminator(torch.nn.Module):
                 if real_in:
                     temp_x[:] = x[:, self.current_mode-1, :, :].unsqueeze(1).expand(x.shape)[:]
                 else:
-                    temp_x[:] = x[:, random.randint(self.current_mode-1, self.repeat_chan-1), :, :].unsqueeze(1).expand(x.shape)[:]
+                    samp_batch = torch.tensor([random.randint(self.current_mode-1, self.repeat_chan-1) for _ in range(x.shape[0])], device=x.device)
+                    temp_x[:] = x[torch.arange(x.shape[0]), samp_batch].unsqueeze(1).expand(x.shape)[:]
                 # R is already done initially
                 # RG
                 if self.current_mode == 2:

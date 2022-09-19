@@ -156,7 +156,7 @@ def parse_comma_separated_list(s):
 @click.option('--resume',       help='Resume from given network pickle', metavar='[PATH|URL]',  type=str)
 
 # Progressive learning config
-@click.option('--channel_inc',  help='Increment to learn new channels in ticks, set to 0 to disable', metavar='INT', type=int, default=2)
+@click.option('--channel_inc',  help='Increment to learn new channels in ticks, set to 0 to disable', metavar='INT', type=int, default=600)
 
 # Misc hyperparameters.
 @click.option('--batch-gpu',    help='Limit batch size per GPU', metavar='INT',                 type=click.IntRange(min=1), default=16)
