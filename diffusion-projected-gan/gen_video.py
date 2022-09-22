@@ -294,6 +294,7 @@ def generate_images(
         device = torch.device('cpu')
     else:
         device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
+
     if rgba:
         if '{}' not in output:
             raise AssertionError('Output must have `{}` in file name to identify the video!')
@@ -307,7 +308,7 @@ def generate_images(
         G = legacy.load_network_pkl(f)['G_ema'].to(device) # type: ignore
 
     gen_interp_video(G=G, mp4=output, bitrate='12M', grid_dims=grid, num_keyframes=num_keyframes, w_frames=w_frames,
-                     seeds=seeds, shuffle_seed=shuffle_seed, psi=truncation_psi, class_idx=class_idx, rgba=rgba, rgba_mode=rgba_mode,
+                     seeds=seeds, shuffle_seed=shuffle_seed, psi=truncation_psi, device=device, class_idx=class_idx, rgba=rgba, rgba_mode=rgba_mode,
                      rgba_mult=rgba_mult, mask_cutoff=mask_cutoff, filt_mode=filt_mode)
 
 #----------------------------------------------------------------------------
