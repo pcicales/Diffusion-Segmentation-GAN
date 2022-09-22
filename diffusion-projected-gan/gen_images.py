@@ -83,6 +83,7 @@ def make_transform(translate: Tuple[float,float], angle: float):
 @click.option('--translate', help='Translate XY-coordinate (e.g. \'0.3,1\')', type=parse_vec2, default='0,0', show_default=True, metavar='VEC2')
 @click.option('--rotate', help='Rotation angle in degrees', type=float, default=0, show_default=True, metavar='ANGLE')
 @click.option('--outdir', help='Where to save the output images', type=str, default='/data/public/HULA/GEN_GLOM_RGBA', metavar='DIR')
+@click.option('--force_cpu', help='Force cpu usage even if using CUDA', type=bool, default=True, metavar='BOOL')
 
 # Segmentation config
 @click.option('--rgba',       help='Whether or not we are generating with mask', metavar='BOOL', type=bool, default=True)
@@ -99,6 +100,7 @@ def generate_images(
     truncation_psi: float,
     noise_mode: str,
     outdir: str,
+    force_cpu: bool,
     translate: Tuple[float,float],
     rotate: float,
     class_idx: Optional[int],
@@ -126,7 +128,10 @@ def generate_images(
     """
 
     print('Loading networks from "%s"...' % network_pkl)
-    device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
+    if force_cpu:
+        device = torch.device('cpu')
+    else:
+        device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
     with dnnlib.util.open_url(network_pkl) as f:
         G = legacy.load_network_pkl(f)['G_ema'].to(device) # type: ignore
 

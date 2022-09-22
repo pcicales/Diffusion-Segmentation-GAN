@@ -51,7 +51,7 @@ def layout_grid(img, grid_w=None, grid_h=1, float_to_uint8=True, chw_to_hwc=True
 
 def gen_interp_video(G, mp4: str, seeds, shuffle_seed=None, w_frames=60*4, kind='cubic', grid_dims=(1,1),
                      num_keyframes=None, wraps=2, psi=1, device=torch.device('cuda'), class_idx=None,
-                     rgba=False, rgba_mode='', rgba_mult=1, mask_cutoff=0.4,  **video_kwargs):
+                     rgba=False, rgba_mode='', rgba_mult=1, mask_cutoff=0.4, filt_mode=False,  **video_kwargs):
     grid_w = grid_dims[0]
     grid_h = grid_dims[1]
 
@@ -137,40 +137,48 @@ def gen_interp_video(G, mp4: str, seeds, shuffle_seed=None, w_frames=60*4, kind=
                         # Convert the image
                         img = np.rint(img.permute(1, 2, 0).numpy()).astype('uint8')
 
-                        # we now need to clean the mask as needed
-                        # 1) morphological transformation (eliminate small islands)
-                        se1 = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
-                        se2 = cv2.getStructuringElement(cv2.MORPH_RECT, (2, 2))
-                        mask = cv2.morphologyEx(img[:, :, -1], cv2.MORPH_CLOSE, se1)
-                        mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, se2)
-                        img[..., -1] = mask
+                        if filt_mode:
+                            # we now need to clean the mask as needed
+                            # 1) morphological transformation (eliminate small islands)
+                            se1 = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
+                            se2 = cv2.getStructuringElement(cv2.MORPH_RECT, (2, 2))
+                            mask = cv2.morphologyEx(img[:, :, -1], cv2.MORPH_CLOSE, se1)
+                            mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, se2)
+                            img[..., -1] = mask
 
-                        # 2) flood fill (fill in any holes)
-                        # Copy the thresholded image.
-                        im_floodfill = img[..., -1].copy()
+                            # 2) flood fill (fill in any holes)
+                            # Copy the thresholded image.
+                            im_floodfill = img[..., -1].copy()
 
-                        # Mask used to flood filling.
-                        # Notice the size needs to be 2 pixels than the image.
-                        h, w = img[..., -1].shape[:2]
-                        mask = np.zeros((h + 2, w + 2), np.uint8)
+                            # Mask used to flood filling.
+                            # Notice the size needs to be 2 pixels than the image.
+                            h, w = img[..., -1].shape[:2]
+                            mask = np.zeros((h + 2, w + 2), np.uint8)
 
-                        # Floodfill from point (0, 0)
-                        cv2.floodFill(im_floodfill, mask, (0, 0), 255)
+                            # Floodfill from point (0, 0)
+                            cv2.floodFill(im_floodfill, mask, (0, 0), 255)
 
-                        # Invert floodfilled image
-                        im_floodfill_inv = cv2.bitwise_not(im_floodfill)
+                            # Invert floodfilled image
+                            im_floodfill_inv = cv2.bitwise_not(im_floodfill)
 
-                        # Combine the two images to get the foreground.
-                        img[..., -1] = img[..., -1] | im_floodfill_inv
+                            # Combine the two images to get the foreground.
+                            img[..., -1] = img[..., -1] | im_floodfill_inv
 
-                        # 3) size filtering (remove any contours that are too small)
-                        contour_stack = []
-                        contours, _ = cv2.findContours(img[..., -1], cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
-                        mask = np.zeros_like(img[..., -1])
-                        for contour in contours:
-                            area = cv2.contourArea(contour)
-                            if area > mask_cutoff:
-                                contour_stack.append(contour)
+                            # 3) size filtering (remove any contours that are too small)
+                            contour_stack = []
+                            contours, _ = cv2.findContours(img[..., -1], cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+                            mask = np.zeros_like(img[..., -1])
+                            for contour in contours:
+                                area = cv2.contourArea(contour)
+                                if area > mask_cutoff:
+                                    contour_stack.append(contour)
+                        else:
+                            # get the contours
+                            contour_stack = []
+                            contours, _ = cv2.findContours(img[..., -1], cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+                            mask = np.zeros_like(img[..., -1])
+                            for contour in contours:
+                                    contour_stack.append(contour)
 
                         # draw the contours onto the image
                         img = img.copy()[:, :, :-1]
@@ -231,12 +239,15 @@ def parse_tuple(s: Union[str, Tuple[int,int]]) -> Tuple[int, int]:
 @click.option('--trunc', 'truncation_psi', type=float, help='Truncation psi', default=1, show_default=True)
 @click.option('--output', help='Output .mp4 filename', type=str, default='/data/public/HULA/GEN_GLOM_RGBA_VIDEOS/{}.mp4', metavar='FILE')
 @click.option('--class', 'class_idx', type=int, help='Class label (unconditional if not specified)')
+@click.option('--force_cpu', help='Force cpu usage even if using CUDA', type=bool, default=True, metavar='BOOL')
+
 
 # Segmentation config
 @click.option('--rgba',       help='Whether or not we are generating with mask', metavar='BOOL', type=bool, default=True)
 @click.option('--rgba_mode',  help='How we encode our masks', metavar='STR', type=click.Choice(['mean_extract', 'naive']), default='mean_extract')
 @click.option('--rgba_mult',  help='What multiplier to use on binary mask', metavar='INT', type=int, default=3)
 @click.option('--mask_cutoff',  help='Pixel filtering to remove noisy contours', metavar='INT', type=int, default=200)
+@click.option('--filt_mode',       help='Whether or not we are using cv2 filtering', metavar='BOOL', type=bool, default=False)
 
 
 def generate_images(
@@ -248,6 +259,8 @@ def generate_images(
     num_keyframes: Optional[int],
     w_frames: int,
     output: str,
+    force_cpu: bool,
+    filt_mode: bool,
     class_idx: Optional[int],
     rgba: Optional[bool],
     rgba_mode: str,
@@ -277,7 +290,10 @@ def generate_images(
     """
 
     print('Loading networks from "%s"...' % network_pkl)
-    device = torch.device('cuda')
+    if force_cpu:
+        device = torch.device('cpu')
+    else:
+        device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
     if rgba:
         if '{}' not in output:
             raise AssertionError('Output must have `{}` in file name to identify the video!')
@@ -292,7 +308,7 @@ def generate_images(
 
     gen_interp_video(G=G, mp4=output, bitrate='12M', grid_dims=grid, num_keyframes=num_keyframes, w_frames=w_frames,
                      seeds=seeds, shuffle_seed=shuffle_seed, psi=truncation_psi, class_idx=class_idx, rgba=rgba, rgba_mode=rgba_mode,
-                     rgba_mult=rgba_mult, mask_cutoff=mask_cutoff)
+                     rgba_mult=rgba_mult, mask_cutoff=mask_cutoff, filt_mode=filt_mode)
 
 #----------------------------------------------------------------------------
 
